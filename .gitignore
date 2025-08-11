@@ -1,0 +1,38 @@
+# R 相关
+.Rproj.user
+.Rhistory
+.Rdata
+.httr-oauth
+.DS_Store
+
+# 生成的图表文件
+*.pdf
+*.png
+centrality_plot.pdf
+centrality_table.csv
+Rplots.pdf
+
+# 日志文件
+*.log
+
+# 临时文件
+*~
+.#*
+
+# 系统文件
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDE 文件
+.vscode/
+.idea/
+
+# 包文件
+*.tar.gz
+*.tgz
+
+# 示例输出文件（保留示例数据）
+analysis_data_*.csv
+network_plot_*.png
+centrality_plot_*.png
