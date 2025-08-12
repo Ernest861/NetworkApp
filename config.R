@@ -251,3 +251,105 @@ REPORT_CONFIG <- list(
   
   output_formats = c("html", "pdf", "word")
 )
+
+# =============================================================================
+# 贝叶斯网络分析配置
+# =============================================================================
+
+# 贝叶斯网络算法参数
+BAYESIAN_PARAMS <- list(
+  # 支持的算法
+  algorithms = list(
+    "hc" = "Hill Climbing",
+    "tabu" = "Tabu Search", 
+    "pc" = "PC Algorithm",
+    "gs" = "Grow-Shrink"
+  ),
+  
+  # 评分函数
+  score_functions = list(
+    "bge" = "BGe (贝叶斯高斯)",
+    "bic" = "BIC (贝叶斯信息准则)",
+    "aic" = "AIC (赤池信息准则)"
+  ),
+  
+  # 默认参数
+  defaults = list(
+    algorithm = "hc",
+    score = "bge",
+    bootstrap_rounds = 1000,
+    strength_threshold = 0.85,
+    direction_threshold = 0.5,
+    min_variables = 3,
+    max_variables = 50
+  ),
+  
+  # 约束规则类型
+  constraint_types = list(
+    "inter_scale" = "量表间理论约束",
+    "intra_scale_distant" = "同量表内远程约束", 
+    "temporal_logic" = "逻辑时序约束",
+    "dimension_cohesion" = "维度内聚约束"
+  ),
+  
+  # 理论约束规则模板
+  theoretical_constraints = list(
+    # AUDIT -> HRF: 酒精使用不能影响动机形成 (理论上是动机驱动使用)
+    "AUDIT_to_HRF" = list(
+      from_pattern = "^AUDIT",
+      to_pattern = "^HRF",
+      type = "blacklist",
+      reason = "理论上动机驱动行为，而非行为形成动机"
+    ),
+    
+    # PHQ -> AUDIT: 抑郁症状不能影响酒精使用 (但酒精可能导致抑郁)
+    "PHQ_to_AUDIT" = list(
+      from_pattern = "^PHQ",
+      to_pattern = "^AUDIT", 
+      type = "blacklist",
+      reason = "理论上酒精使用可能导致抑郁，而非相反"
+    ),
+    
+    # 同维度题目优先连接
+    "within_dimension" = list(
+      type = "whitelist_preference",
+      reason = "同一维度的题目在理论上更可能相关"
+    )
+  )
+)
+
+# 贝叶斯网络可视化配置
+BAYESIAN_VIZ_CONFIG <- list(
+  colors = list(
+    # 不同强度的边颜色
+    edge_strength = list(
+      high = "#2c3e50",      # 强边 (0.8-1.0)
+      medium = "#7f8c8d",    # 中等边 (0.6-0.8)
+      low = "#bdc3c7"        # 弱边 (0.5-0.6)
+    ),
+    
+    # 约束规则颜色
+    constraints = list(
+      blacklist = "#e74c3c",   # 红色 - 禁止
+      whitelist = "#27ae60",   # 绿色 - 强制
+      violated = "#f39c12"     # 橙色 - 违反约束
+    ),
+    
+    # 节点颜色 (按量表分类)
+    nodes = list(
+      AUDIT = "#3498db",
+      HRF = "#9b59b6", 
+      PHQ = "#e74c3c",
+      GAD = "#f1c40f",
+      other = "#95a5a6"
+    )
+  ),
+  
+  layout = list(
+    default = "spring",
+    node_size_range = c(8, 20),
+    edge_width_range = c(1, 6),
+    label_size = 1.2,
+    legend_position = "right"
+  )
+)

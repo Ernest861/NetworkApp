@@ -420,3 +420,437 @@ export_analysis_results <- function(network_result, centrality_result = NULL,
   
   return(files)
 }
+
+# =============================================================================
+# 贝叶斯网络分析函数
+# =============================================================================
+
+#' 增强的数据验证 - 包含李克特量表检测
+#' @param data 输入数据
+#' @return 包含李克特量表信息的验证结果
+validate_likert_data <- function(data) {
+  validation_result <- validate_data(data)  # 调用原有验证
+  
+  # 添加李克特量表特异性检验
+  validation_result$likert_info <- list()
+  validation_result$bayesian_ready <- FALSE
+  
+  numeric_cols <- names(data)[sapply(data, is.numeric)]
+  
+  for(col_name in numeric_cols) {
+    if(sum(!is.na(data[[col_name]])) < 10) next  # 跳过缺失值太多的列
+    
+    unique_vals <- sort(unique(data[[col_name]], na.rm = TRUE))
+    
+    # 检查是否为李克特量表特征
+    if(length(unique_vals) >= 2 && length(unique_vals) <= 10) {
+      is_sequential <- all(diff(unique_vals) == 1)
+      min_val <- min(unique_vals)
+      max_val <- max(unique_vals)
+      
+      validation_result$likert_info[[col_name]] <- list(
+        range = c(min_val, max_val),
+        levels = length(unique_vals), 
+        is_likert = is_sequential && min_val %in% c(0, 1),
+        values = unique_vals
+      )
+      
+      # 警告非标准李克特量表
+      if(!is_sequential) {
+        validation_result$warnings <- c(validation_result$warnings,
+          paste0(col_name, ": 数值不连续，可能影响贝叶斯分析"))
+      }
+      
+      if(!min_val %in% c(0, 1)) {
+        validation_result$warnings <- c(validation_result$warnings,
+          paste0(col_name, ": 起始值不是0或1，建议检查编码"))
+      }
+    }
+  }
+  
+  # 评估贝叶斯网络分析适用性
+  likert_vars <- length(validation_result$likert_info)
+  if(likert_vars >= BAYESIAN_PARAMS$defaults$min_variables) {
+    validation_result$bayesian_ready <- TRUE
+  } else {
+    validation_result$errors <- c(validation_result$errors,
+      paste0("贝叶斯网络分析至少需要", BAYESIAN_PARAMS$defaults$min_variables, 
+             "个李克特变量，当前只有", likert_vars, "个"))
+  }
+  
+  return(validation_result)
+}
+
+#' 智能生成李克特量表的约束规则
+#' @param data 数据框  
+#' @param scales 识别的量表结构
+#' @param constraint_types 约束类型向量
+#' @param inter_scale_strength 量表间约束强度
+#' @return 黑白名单列表
+generate_smart_constraints <- function(data, scales, constraint_types, inter_scale_strength = 0.8) {
+  
+  blacklist <- NULL
+  whitelist <- NULL
+  var_names <- names(data)
+  
+  # 1. 量表间理论约束
+  if("inter_scale" %in% constraint_types) {
+    
+    # 应用配置的理论约束
+    for(constraint_name in names(BAYESIAN_PARAMS$theoretical_constraints)) {
+      constraint <- BAYESIAN_PARAMS$theoretical_constraints[[constraint_name]]
+      
+      if(constraint$type == "blacklist") {
+        from_vars <- var_names[grepl(constraint$from_pattern, var_names)]
+        to_vars <- var_names[grepl(constraint$to_pattern, var_names)]
+        
+        if(length(from_vars) > 0 && length(to_vars) > 0) {
+          constraint_pairs <- expand.grid(from = from_vars, to = to_vars, stringsAsFactors = FALSE)
+          blacklist <- rbind(blacklist, constraint_pairs)
+        }
+      }
+    }
+  }
+  
+  # 2. 同量表内远程约束
+  if("intra_scale_distant" %in% constraint_types) {
+    for(scale_name in names(scales)) {
+      scale_vars <- scales[[scale_name]]$items
+      scale_vars <- intersect(scale_vars, var_names)  # 只保留实际存在的变量
+      
+      if(length(scale_vars) > 6) {
+        # 禁止距离超过3个位置的题目直接连接
+        for(i in 1:(length(scale_vars)-4)) {
+          distant_vars <- scale_vars[(i+4):length(scale_vars)]
+          distant_constraints <- expand.grid(from = scale_vars[i], to = distant_vars, stringsAsFactors = FALSE)
+          blacklist <- rbind(blacklist, distant_constraints)
+          # 双向约束
+          distant_constraints_rev <- expand.grid(from = distant_vars, to = scale_vars[i], stringsAsFactors = FALSE)
+          blacklist <- rbind(blacklist, distant_constraints_rev)
+        }
+      }
+    }
+  }
+  
+  # 3. 时序逻辑约束
+  if("temporal_logic" %in% constraint_types) {
+    for(scale_name in names(scales)) {
+      scale_vars <- scales[[scale_name]]$items
+      scale_vars <- intersect(scale_vars, var_names)
+      
+      # 提取题目编号
+      item_numbers <- as.numeric(gsub(".*_", "", scale_vars))
+      if(!any(is.na(item_numbers)) && length(item_numbers) > 1) {
+        # 按编号排序
+        sorted_indices <- order(item_numbers)
+        sorted_vars <- scale_vars[sorted_indices] 
+        
+        # 禁止后面的题目影响前面的题目
+        for(i in 1:(length(sorted_vars)-1)) {
+          for(j in (i+1):length(sorted_vars)) {
+            temporal_constraint <- data.frame(from = sorted_vars[j], to = sorted_vars[i], stringsAsFactors = FALSE)
+            blacklist <- rbind(blacklist, temporal_constraint)
+          }
+        }
+      }
+    }
+  }
+  
+  # 4. 维度内聚约束（白名单）
+  if("dimension_cohesion" %in% constraint_types) {
+    for(scale_name in names(scales)) {
+      subscales <- scales[[scale_name]]$subscales
+      
+      if(length(subscales) > 1) {
+        for(subscale_name in names(subscales)) {
+          subscale_items <- subscales[[subscale_name]]$items
+          subscale_items <- intersect(subscale_items, var_names)
+          
+          if(length(subscale_items) >= 2) {
+            # 同维度题目间相邻连接
+            for(i in 1:(length(subscale_items)-1)) {
+              cohesion_constraint <- data.frame(from = subscale_items[i], 
+                                               to = subscale_items[i+1], 
+                                               stringsAsFactors = FALSE)
+              whitelist <- rbind(whitelist, cohesion_constraint)
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  return(list(
+    blacklist = blacklist,
+    whitelist = whitelist,
+    summary = list(
+      blacklist_rules = ifelse(is.null(blacklist), 0, nrow(blacklist)),
+      whitelist_rules = ifelse(is.null(whitelist), 0, nrow(whitelist)),
+      constraint_types = constraint_types
+    )
+  ))
+}
+
+#' 解析手动输入的约束规则
+#' @param constraint_text 约束规则文本
+#' @return 解析结果列表
+parse_manual_constraints <- function(constraint_text) {
+  if(is.null(constraint_text) || nchar(trimws(constraint_text)) == 0) {
+    return(list(constraints = NULL, invalid_lines = c(), valid_count = 0))
+  }
+  
+  lines <- strsplit(constraint_text, "\n")[[1]]
+  lines <- trimws(lines[nchar(trimws(lines)) > 0])  # 移除空行
+  
+  constraints <- NULL
+  invalid_lines <- c()
+  
+  for(i in seq_along(lines)) {
+    parts <- strsplit(lines[i], ",")[[1]]
+    if(length(parts) == 2) {
+      from_var <- trimws(parts[1])
+      to_var <- trimws(parts[2])
+      
+      if(nchar(from_var) > 0 && nchar(to_var) > 0) {
+        constraints <- rbind(constraints, data.frame(from = from_var, to = to_var, stringsAsFactors = FALSE))
+      } else {
+        invalid_lines <- c(invalid_lines, i)
+      }
+    } else {
+      invalid_lines <- c(invalid_lines, i)
+    }
+  }
+  
+  return(list(
+    constraints = constraints,
+    invalid_lines = invalid_lines,
+    valid_count = ifelse(is.null(constraints), 0, nrow(constraints))
+  ))
+}
+
+#' 验证约束规则的有效性
+#' @param constraints 约束规则数据框
+#' @param available_vars 可用变量列表
+#' @return 验证结果列表
+validate_constraints <- function(constraints, available_vars) {
+  if(is.null(constraints) || nrow(constraints) == 0) {
+    return(list(valid = TRUE, errors = c(), warnings = c(), stats = list(total_rules = 0)))
+  }
+  
+  errors <- c()
+  warnings <- c()
+  
+  # 检查变量是否存在
+  missing_from <- setdiff(constraints$from, available_vars)
+  missing_to <- setdiff(constraints$to, available_vars)
+  
+  if(length(missing_from) > 0) {
+    errors <- c(errors, paste("未找到变量 (from):", paste(missing_from, collapse = ", ")))
+  }
+  
+  if(length(missing_to) > 0) {
+    errors <- c(errors, paste("未找到变量 (to):", paste(missing_to, collapse = ", ")))
+  }
+  
+  # 检查自循环
+  self_loops <- constraints$from == constraints$to
+  if(any(self_loops)) {
+    warnings <- c(warnings, paste("发现自循环:", paste(constraints$from[self_loops], collapse = ", ")))
+  }
+  
+  # 检查重复规则
+  duplicate_rules <- duplicated(constraints)
+  if(any(duplicate_rules)) {
+    warnings <- c(warnings, paste("发现重复规则:", sum(duplicate_rules), "个"))
+  }
+  
+  return(list(
+    valid = length(errors) == 0,
+    errors = errors,
+    warnings = warnings,
+    stats = list(
+      total_rules = nrow(constraints),
+      unique_from = length(unique(constraints$from)),
+      unique_to = length(unique(constraints$to)),
+      self_loops = sum(self_loops),
+      duplicates = sum(duplicate_rules)
+    )
+  ))
+}
+
+#' 李克特量表专用贝叶斯网络分析
+#' @param data 预处理后的李克特量表数据
+#' @param algorithm 学习算法
+#' @param score 评分函数  
+#' @param bootstrap_n Bootstrap轮数
+#' @param threshold 强度阈值
+#' @param blacklist 黑名单约束
+#' @param whitelist 白名单约束
+#' @return 贝叶斯网络分析结果
+conduct_likert_bayesian_analysis <- function(data, 
+                                           algorithm = "hc",
+                                           score = "bge",
+                                           bootstrap_n = 1000,
+                                           threshold = 0.85,
+                                           blacklist = NULL,
+                                           whitelist = NULL) {
+  
+  # 检查bnlearn包
+  if(!requireNamespace("bnlearn", quietly = TRUE)) {
+    stop("贝叶斯网络分析需要bnlearn包。请安装: install.packages('bnlearn')")
+  }
+  
+  # 确保数据为数值型并移除缺失值
+  numeric_data <- data[sapply(data, is.numeric)]
+  
+  # 将所有integer转换为numeric (bnlearn要求)
+  for(col in names(numeric_data)) {
+    if(is.integer(numeric_data[[col]])) {
+      numeric_data[[col]] <- as.numeric(numeric_data[[col]])
+    }
+  }
+  
+  numeric_data <- na.omit(numeric_data)
+  
+  if(nrow(numeric_data) < 30) {
+    stop("贝叶斯网络分析需要至少30个完整观测值")
+  }
+  
+  if(ncol(numeric_data) < 3) {
+    stop("贝叶斯网络分析需要至少3个变量")
+  }
+  
+  # 准备算法参数
+  algo_args <- list(score = score)
+  if(!is.null(blacklist)) {
+    algo_args$blacklist <- blacklist
+  }
+  if(!is.null(whitelist)) {
+    algo_args$whitelist <- whitelist
+  }
+  
+  # 学习网络结构
+  tryCatch({
+    if(algorithm == "hc") {
+      learned_net <- bnlearn::hc(numeric_data, score = score, blacklist = blacklist, whitelist = whitelist)
+    } else if(algorithm == "tabu") {
+      learned_net <- bnlearn::tabu(numeric_data, score = score, blacklist = blacklist, whitelist = whitelist)
+    } else if(algorithm == "pc") {
+      learned_net <- bnlearn::pc.stable(numeric_data, blacklist = blacklist, whitelist = whitelist)
+    } else {
+      learned_net <- bnlearn::gs(numeric_data, blacklist = blacklist, whitelist = whitelist)
+    }
+    
+    # Bootstrap稳定性分析
+    boot_result <- bnlearn::boot.strength(numeric_data,
+                                         R = bootstrap_n,
+                                         algorithm = algorithm,
+                                         algorithm.args = algo_args)
+    
+    # 筛选稳定边
+    stable_edges <- boot_result[boot_result$strength >= threshold & 
+                               boot_result$direction >= 0.5, ]
+    
+    # 创建平均网络
+    avg_network <- bnlearn::averaged.network(boot_result, threshold = threshold)
+    
+    # 网络评估
+    network_score <- bnlearn::score(learned_net, numeric_data, type = score)
+    
+    return(list(
+      learned_network = learned_net,
+      averaged_network = avg_network,
+      bootstrap_result = boot_result,
+      stable_edges = stable_edges,
+      network_score = network_score,
+      blacklist = blacklist,
+      whitelist = whitelist,
+      parameters = list(
+        algorithm = algorithm,
+        score = score,
+        bootstrap_n = bootstrap_n,
+        threshold = threshold,
+        sample_size = nrow(numeric_data),
+        variable_count = ncol(numeric_data)
+      )
+    ))
+    
+  }, error = function(e) {
+    stop(paste("贝叶斯网络分析失败:", e$message))
+  })
+}
+
+#' 生成贝叶斯网络分析报告
+#' @param bayesian_result 贝叶斯网络分析结果
+#' @return HTML格式的报告字符串
+generate_bayesian_report <- function(bayesian_result) {
+  
+  params <- bayesian_result$parameters
+  stable_count <- nrow(bayesian_result$stable_edges)
+  total_possible_edges <- params$variable_count * (params$variable_count - 1)
+  
+  report_html <- paste0(
+    "<h2>🧠 贝叶斯网络分析报告</h2>",
+    "<p><strong>生成时间：</strong>", Sys.time(), "</p>",
+    "<hr>",
+    
+    "<h3>📊 分析参数</h3>",
+    "<ul>",
+    "<li><strong>学习算法：</strong>", BAYESIAN_PARAMS$algorithms[[params$algorithm]], "</li>",
+    "<li><strong>评分函数：</strong>", BAYESIAN_PARAMS$score_functions[[params$score]], "</li>",
+    "<li><strong>Bootstrap轮数：</strong>", params$bootstrap_n, "</li>",
+    "<li><strong>强度阈值：</strong>", params$threshold, "</li>",
+    "<li><strong>样本量：</strong>", params$sample_size, "</li>",
+    "<li><strong>变量数：</strong>", params$variable_count, "</li>",
+    "</ul>",
+    
+    "<h3>🔗 网络结构</h3>",
+    "<ul>",
+    "<li><strong>稳定边数量：</strong>", stable_count, " / ", total_possible_edges, " 可能的边</li>",
+    "<li><strong>网络密度：</strong>", round(stable_count / total_possible_edges * 100, 2), "%</li>",
+    "<li><strong>网络得分：</strong>", round(bayesian_result$network_score, 3), "</li>",
+    "</ul>"
+  )
+  
+  # 约束信息
+  if(!is.null(bayesian_result$blacklist) || !is.null(bayesian_result$whitelist)) {
+    report_html <- paste0(report_html,
+      "<h3>⚖️ 约束规则</h3>",
+      "<ul>"
+    )
+    
+    if(!is.null(bayesian_result$blacklist)) {
+      report_html <- paste0(report_html,
+        "<li><strong>黑名单规则：</strong>", nrow(bayesian_result$blacklist), " 个禁止连接</li>"
+      )
+    }
+    
+    if(!is.null(bayesian_result$whitelist)) {
+      report_html <- paste0(report_html,
+        "<li><strong>白名单规则：</strong>", nrow(bayesian_result$whitelist), " 个强制连接</li>"
+      )
+    }
+    
+    report_html <- paste0(report_html, "</ul>")
+  }
+  
+  # 解释和建议
+  report_html <- paste0(report_html,
+    "<h3>📈 结果解释</h3>",
+    "<p>贝叶斯网络分析识别了变量间的<strong>有向因果关系</strong>，不同于无向网络分析：</p>",
+    "<ul>",
+    "<li><strong>有向边</strong>表示可能的因果关系方向</li>",
+    "<li><strong>边强度</strong>反映关系的稳定性和可信度</li>",
+    "<li><strong>网络密度</strong>显示变量间连接的紧密程度</li>",
+    "</ul>",
+    
+    "<h3>💡 应用建议</h3>",
+    "<ul>",
+    "<li>关注强度 ≥ 0.85 的边，这些关系最为稳定</li>",
+    "<li>结合理论知识解释因果关系的合理性</li>",
+    "<li>可与无向网络结果对比，获得更全面的理解</li>",
+    "</ul>"
+  )
+  
+  return(report_html)
+}

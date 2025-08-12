@@ -84,6 +84,7 @@ ui <- dashboardPage(
       menuItem("数据上传", tabName = "upload", icon = icon("upload")),
       menuItem("变量选择", tabName = "variables", icon = icon("check-square")),
       menuItem("网络分析", tabName = "analysis", icon = icon("project-diagram")),
+      menuItem("贝叶斯网络", tabName = "bayesian", icon = icon("brain")),
       menuItem("稳定性分析", tabName = "stability", icon = icon("chart-line")),
       menuItem("结果下载", tabName = "download", icon = icon("download")),
       menuItem("使用说明", tabName = "help", icon = icon("question-circle"))
@@ -276,6 +277,190 @@ ui <- dashboardPage(
         )
       ),
       
+      # 贝叶斯网络分析页面
+      tabItem(
+        tabName = "bayesian",
+        fluidRow(
+          # 约束规则控制区
+          box(
+            title = "⚖️ 网络约束规则", status = "warning", solidHeader = TRUE, width = 12,
+            
+            # 约束规则类型选择
+            radioButtons("constraint_mode", "约束规则模式",
+                        choices = list(
+                          "智能约束 (推荐)" = "smart",
+                          "手动约束" = "manual", 
+                          "无约束" = "none"
+                        ), selected = "smart", inline = TRUE),
+            
+            # 智能约束配置
+            conditionalPanel(
+              condition = "input.constraint_mode == 'smart'",
+              wellPanel(
+                h5("🤖 智能约束规则"),
+                div(class = "alert alert-info",
+                  tags$p(class = "small mb-1", 
+                    tags$strong("智能约束说明："), "系统根据心理测量学理论自动生成约束规则，提高网络结构的合理性")),
+                
+                checkboxGroupInput("smart_constraints",
+                                  label = "选择约束类型",
+                                  choices = list(
+                                    "量表间理论约束 (AUDIT→HRF等)" = "inter_scale",
+                                    "同量表内远程约束 (题目1不直接影响题目10)" = "intra_scale_distant",
+                                    "逻辑时序约束 (基于题目逻辑顺序)" = "temporal_logic",
+                                    "维度内聚约束 (同维度题目优先连接)" = "dimension_cohesion"
+                                  ),
+                                  selected = c("inter_scale", "intra_scale_distant")),
+                
+                # 详细约束说明
+                div(class = "panel panel-default",
+                  div(class = "panel-body", style = "padding: 10px;",
+                    tags$small(
+                      tags$strong("📋 约束规则详解："), tags$br(),
+                      "🔹 ", tags$strong("量表间理论约束"), "：禁止理论上不合理的因果关系（如AUDIT影响HRF动机形成）", tags$br(),
+                      "🔹 ", tags$strong("远程约束"), "：防止同一量表中相距4个以上位置的题目直接连接", tags$br(), 
+                      "🔹 ", tags$strong("时序约束"), "：确保因果关系符合逻辑顺序（题目N+1不能影响题目N）", tags$br(),
+                      "🔹 ", tags$strong("内聚约束"), "：促进同一维度的相邻题目优先建立连接"
+                    )
+                  )
+                ),
+                
+                conditionalPanel(
+                  condition = "input.smart_constraints && input.smart_constraints.indexOf('inter_scale') != -1",
+                  sliderInput("inter_scale_strength", "量表间约束强度",
+                             min = 0, max = 1, value = 0.8, step = 0.1)
+                )
+              )
+            ),
+            
+            # 手动约束配置
+            conditionalPanel(
+              condition = "input.constraint_mode == 'manual'",
+              fluidRow(
+                column(6,
+                  wellPanel(
+                    h5("🚫 黑名单 (禁止连接)"),
+                    textAreaInput("manual_blacklist", 
+                                 label = "禁止的边 (from,to 格式，每行一个)",
+                                 placeholder = "AUDIT10_1,HRF18_1\nAUDIT10_2,HRF18_2\nPHQ9_1,GAD7_1",
+                                 rows = 6),
+                    actionButton("validate_blacklist", "验证黑名单", class = "btn-warning btn-sm"),
+                    br(), br(),
+                    verbatimTextOutput("blacklist_status")
+                  )
+                ),
+                column(6,
+                  wellPanel(
+                    h5("✅ 白名单 (强制连接)"),
+                    textAreaInput("manual_whitelist",
+                                 label = "强制的边 (from,to 格式，每行一个)", 
+                                 placeholder = "HRF18_1,HRF18_2\nPHQ9_1,PHQ9_2",
+                                 rows = 6),
+                    actionButton("validate_whitelist", "验证白名单", class = "btn-success btn-sm"),
+                    br(), br(),
+                    verbatimTextOutput("whitelist_status")
+                  )
+                )
+              )
+            ),
+            
+            # 约束规则预览
+            conditionalPanel(
+              condition = "input.constraint_mode != 'none'",
+              wellPanel(
+                h5("📋 当前约束规则预览"),
+                fluidRow(
+                  column(4,
+                    h6("黑名单规则数量:"), 
+                    verbatimTextOutput("blacklist_count")
+                  ),
+                  column(4,
+                    h6("白名单规则数量:"),
+                    verbatimTextOutput("whitelist_count") 
+                  ),
+                  column(4,
+                    br(),
+                    actionButton("preview_constraints", "📊 预览约束", class = "btn-info btn-sm")
+                  )
+                )
+              )
+            )
+          )
+        ),
+        
+        fluidRow(
+          # 参数配置区
+          box(
+            title = "🧠 贝叶斯网络参数", status = "primary", solidHeader = TRUE, width = 4,
+            
+            selectInput("bn_algorithm", "学习算法",
+                       choices = list(
+                         "Hill Climbing (推荐)" = "hc",
+                         "Tabu Search" = "tabu",
+                         "PC Algorithm" = "pc"
+                       ), selected = "hc"),
+            
+            selectInput("score_function", "评分函数", 
+                       choices = list(
+                         "BGe (贝叶斯高斯)" = "bge",
+                         "BIC (贝叶斯信息准则)" = "bic"
+                       ), selected = "bge"),
+            
+            numericInput("bootstrap_rounds", "Bootstrap轮数",
+                        value = 1000, min = 500, max = 5000, step = 500),
+            
+            numericInput("strength_threshold", "边强度阈值", 
+                        value = 0.85, min = 0.5, max = 1.0, step = 0.05),
+            
+            br(),
+            actionButton("run_bayesian", "🚀 运行贝叶斯分析", 
+                        class = "btn-primary btn-lg", width = "100%")
+          ),
+          
+          # 结果展示区
+          box(
+            title = "📊 分析状态", status = "info", solidHeader = TRUE, width = 8,
+            conditionalPanel(
+              condition = "!output.bayesianComplete",
+              div(
+                style = "text-align: center; padding: 50px;",
+                h4("请配置参数并点击运行分析"),
+                tags$p("贝叶斯网络分析将识别变量间的有向因果关系"),
+                conditionalPanel(
+                  condition = "!output.bayesianReady",
+                  div(class = "alert alert-warning",
+                    "⚠️ 需要先上传数据并通过李克特量表验证")
+                )
+              )
+            ),
+            conditionalPanel(
+              condition = "output.bayesianComplete",
+              tabsetPanel(
+                id = "bayesian_results",
+                tabPanel("网络结构", plotOutput("bayesian_network_plot", height = "600px")),
+                tabPanel("稳定性分析", plotOutput("bayesian_stability_plot", height = "600px")),
+                tabPanel("边强度表", DT::dataTableOutput("bayesian_edges_table")),
+                tabPanel("分析报告", uiOutput("bayesian_report"))
+              )
+            )
+          )
+        ),
+        
+        # 下载区
+        conditionalPanel(
+          condition = "output.bayesianComplete",
+          fluidRow(
+            box(
+              title = "📥 结果下载", status = "success", solidHeader = TRUE, width = 12,
+              column(3, downloadButton("download_bn_plot", "网络图", class = "btn-success")),
+              column(3, downloadButton("download_bn_stability", "稳定性图", class = "btn-success")), 
+              column(3, downloadButton("download_bn_edges", "边强度数据", class = "btn-success")),
+              column(3, downloadButton("download_bn_report", "完整报告", class = "btn-success"))
+            )
+          )
+        )
+      ),
+      
       # 稳定性分析页面（独立版块）
       tabItem(
         tabName = "stability",
@@ -430,8 +615,8 @@ server <- function(input, output, session) {
         values$raw_data <- dplyr::select_if(values$raw_data, is.numeric)
         incProgress(0.3, detail = "验证数据质量...")
         
-        # 数据验证
-        values$validation_result <- validate_data(values$raw_data)
+        # 数据验证 (使用增强版包含李克特量表检测)
+        values$validation_result <- validate_likert_data(values$raw_data)
         
         if(values$validation_result$valid) {
           incProgress(0.5, detail = "解析量表结构...")
@@ -1266,6 +1451,317 @@ server <- function(input, output, session) {
     variables_confirmed(FALSE)
     showNotification("已重置变量选择，请重新配置", type = "message")
   })
+  
+  # =============================================================================
+  # 贝叶斯网络分析服务器端逻辑
+  # =============================================================================
+  
+  # 贝叶斯网络分析准备状态
+  output$bayesianReady <- reactive({
+    req(values$validation_result)
+    return(values$validation_result$bayesian_ready)
+  })
+  outputOptions(output, "bayesianReady", suspendWhenHidden = FALSE)
+  
+  # 贝叶斯网络分析完成状态
+  bayesian_completed <- reactiveVal(FALSE)
+  
+  output$bayesianComplete <- reactive({
+    return(bayesian_completed())
+  })
+  outputOptions(output, "bayesianComplete", suspendWhenHidden = FALSE)
+  
+  # 智能约束规则生成
+  smart_constraints <- reactive({
+    req(values$scales, input$constraint_mode == "smart", input$smart_constraints)
+    
+    generate_smart_constraints(
+      data = values$processed_data,
+      scales = values$scales,
+      constraint_types = input$smart_constraints,
+      inter_scale_strength = input$inter_scale_strength %||% 0.8
+    )
+  })
+  
+  # 手动约束规则解析
+  manual_constraints <- reactive({
+    if(input$constraint_mode != "manual") return(list(blacklist = NULL, whitelist = NULL))
+    
+    blacklist_parsed <- parse_manual_constraints(input$manual_blacklist)
+    whitelist_parsed <- parse_manual_constraints(input$manual_whitelist)
+    
+    list(
+      blacklist = blacklist_parsed$constraints,
+      whitelist = whitelist_parsed$constraints,
+      blacklist_errors = blacklist_parsed$invalid_lines,
+      whitelist_errors = whitelist_parsed$invalid_lines
+    )
+  })
+  
+  # 最终约束规则
+  final_bayesian_constraints <- reactive({
+    if(input$constraint_mode == "smart") {
+      return(smart_constraints())
+    } else if(input$constraint_mode == "manual") {
+      return(manual_constraints())
+    } else {
+      return(list(blacklist = NULL, whitelist = NULL))
+    }
+  })
+  
+  # 约束规则计数显示
+  output$blacklist_count <- renderText({
+    constraints <- final_bayesian_constraints()
+    if(is.null(constraints$blacklist)) "0" else nrow(constraints$blacklist)
+  })
+  
+  output$whitelist_count <- renderText({
+    constraints <- final_bayesian_constraints()
+    if(is.null(constraints$whitelist)) "0" else nrow(constraints$whitelist)
+  })
+  
+  # 约束规则验证
+  observeEvent(input$validate_blacklist, {
+    req(input$manual_blacklist)
+    
+    parsed <- parse_manual_constraints(input$manual_blacklist)
+    validation <- validate_constraints(parsed$constraints, names(values$processed_data))
+    
+    if(validation$valid) {
+      output$blacklist_status <- renderText({
+        paste("✅ 黑名单有效\n",
+              "规则数量:", validation$stats$total_rules, "\n",
+              "涉及变量:", validation$stats$unique_from + validation$stats$unique_to)
+      })
+    } else {
+      output$blacklist_status <- renderText({
+        paste("❌ 黑名单有误:\n", paste(validation$errors, collapse = "\n"))
+      })
+    }
+  })
+  
+  observeEvent(input$validate_whitelist, {
+    req(input$manual_whitelist)
+    
+    parsed <- parse_manual_constraints(input$manual_whitelist)
+    validation <- validate_constraints(parsed$constraints, names(values$processed_data))
+    
+    if(validation$valid) {
+      output$whitelist_status <- renderText({
+        paste("✅ 白名单有效\n",
+              "规则数量:", validation$stats$total_rules, "\n", 
+              "涉及变量:", validation$stats$unique_from + validation$stats$unique_to)
+      })
+    } else {
+      output$whitelist_status <- renderText({
+        paste("❌ 白名单有误:\n", paste(validation$errors, collapse = "\n"))
+      })
+    }
+  })
+  
+  # 贝叶斯网络分析执行
+  observeEvent(input$run_bayesian, {
+    req(values$processed_data, values$validation_result$bayesian_ready)
+    
+    withProgress(message = '正在进行贝叶斯网络分析...', value = 0, {
+      
+      incProgress(0.1, detail = "准备数据和约束规则...")
+      
+      # 获取最终分析数据
+      analysis_data <- NULL
+      if(variables_confirmed()) {
+        # 使用高级变量选择的结果构建分析数据
+        analysis_vars <- c()
+        
+        for(scale_name in names(values$scales)) {
+          scale_info <- values$scales[[scale_name]]
+          level_input_id <- paste0("advanced_level_", scale_name)
+          selected_level <- input[[level_input_id]]
+          
+          if(is.null(selected_level)) selected_level <- "summary"
+          
+          if(selected_level == "summary") {
+            total_subscales <- names(scale_info$subscales)[grepl("Total", names(scale_info$subscales))]
+            if(length(total_subscales) > 0) {
+              analysis_vars <- c(analysis_vars, total_subscales[1])
+            } else {
+              analysis_vars <- c(analysis_vars, names(scale_info$subscales)[1])
+            }
+          } else if(selected_level == "subscale") {
+            dimension_subscales <- names(scale_info$subscales)[!grepl("Total", names(scale_info$subscales))]
+            analysis_vars <- c(analysis_vars, dimension_subscales)
+          } else {
+            analysis_vars <- c(analysis_vars, scale_info$items)
+          }
+        }
+        
+        # 构建分析数据
+        available_vars <- intersect(analysis_vars, names(values$processed_data))
+        if(length(available_vars) == 0) {
+          available_vars <- intersect(analysis_vars, names(values$raw_data))
+          analysis_data <- values$raw_data[, available_vars, drop = FALSE]
+        } else {
+          analysis_data <- values$processed_data[, available_vars, drop = FALSE]
+        }
+      } else {
+        # 使用所有可用的数值列
+        analysis_data <- values$processed_data[sapply(values$processed_data, is.numeric)]
+      }
+      
+      incProgress(0.2, detail = "生成约束规则...")
+      
+      # 获取约束规则
+      constraints <- final_bayesian_constraints()
+      
+      incProgress(0.3, detail = "开始网络学习...")
+      
+      tryCatch({
+        # 执行贝叶斯网络分析
+        values$bayesian_result <- conduct_likert_bayesian_analysis(
+          data = analysis_data,
+          algorithm = input$bn_algorithm,
+          score = input$score_function,
+          bootstrap_n = input$bootstrap_rounds,
+          threshold = input$strength_threshold,
+          blacklist = constraints$blacklist,
+          whitelist = constraints$whitelist
+        )
+        
+        incProgress(0.8, detail = "完成分析...")
+        
+        bayesian_completed(TRUE)
+        showNotification("贝叶斯网络分析完成！", type = "message")
+        
+      }, error = function(e) {
+        showNotification(paste("贝叶斯网络分析失败:", e$message), type = "error")
+        bayesian_completed(FALSE)
+      })
+    })
+  })
+  
+  # 贝叶斯网络图输出
+  output$bayesian_network_plot <- renderPlot({
+    req(values$bayesian_result)
+    
+    tryCatch({
+      # 使用bnlearn的绘图功能
+      if(requireNamespace("bnlearn", quietly = TRUE) && requireNamespace("Rgraphviz", quietly = TRUE)) {
+        bnlearn::graphviz.plot(values$bayesian_result$averaged_network)
+      } else {
+        # 备用方案：使用igraph
+        if(requireNamespace("igraph", quietly = TRUE)) {
+          # 转换为igraph格式并绘图
+          edges <- values$bayesian_result$stable_edges
+          if(nrow(edges) > 0) {
+            g <- igraph::graph_from_data_frame(edges[, c("from", "to")], directed = TRUE)
+            igraph::plot(g, vertex.size = 20, vertex.label.cex = 0.8,
+                        edge.arrow.size = 0.5, layout = igraph::layout_with_fr)
+          } else {
+            plot.new()
+            text(0.5, 0.5, "未发现稳定的边连接", cex = 1.5)
+          }
+        } else {
+          plot.new()
+          text(0.5, 0.5, "需要安装Rgraphviz或igraph包进行可视化", cex = 1.2)
+        }
+      }
+    }, error = function(e) {
+      plot.new()
+      text(0.5, 0.5, paste("绘图失败:", e$message), cex = 1.2)
+    })
+  })
+  
+  # 稳定性分析图输出
+  output$bayesian_stability_plot <- renderPlot({
+    req(values$bayesian_result)
+    
+    tryCatch({
+      if(requireNamespace("bnlearn", quietly = TRUE)) {
+        bnlearn::strength.plot(values$bayesian_result$averaged_network, 
+                              values$bayesian_result$bootstrap_result, 
+                              shape = "ellipse")
+      } else {
+        plot.new()
+        text(0.5, 0.5, "需要bnlearn包进行稳定性可视化", cex = 1.2)
+      }
+    }, error = function(e) {
+      plot.new()
+      text(0.5, 0.5, paste("稳定性图绘制失败:", e$message), cex = 1.2)
+    })
+  })
+  
+  # 边强度表输出
+  output$bayesian_edges_table <- DT::renderDataTable({
+    req(values$bayesian_result)
+    
+    edges_data <- values$bayesian_result$stable_edges
+    if(nrow(edges_data) > 0) {
+      # 格式化数据表
+      edges_data$strength <- round(edges_data$strength, 3)
+      edges_data$direction <- round(edges_data$direction, 3)
+      
+      DT::datatable(
+        edges_data,
+        options = list(
+          pageLength = 10,
+          scrollX = TRUE,
+          dom = 'Bfrtip',
+          buttons = c('copy', 'csv', 'excel')
+        ),
+        rownames = FALSE,
+        caption = "稳定边强度表 (强度 ≥ 0.85, 方向 ≥ 0.5)"
+      )
+    } else {
+      DT::datatable(
+        data.frame(信息 = "未发现达到阈值的稳定边连接"),
+        options = list(dom = 't'),
+        rownames = FALSE
+      )
+    }
+  })
+  
+  # 分析报告输出
+  output$bayesian_report <- renderUI({
+    req(values$bayesian_result)
+    
+    HTML(generate_bayesian_report(values$bayesian_result))
+  })
+  
+  # 下载处理器
+  output$download_bn_plot <- downloadHandler(
+    filename = function() {
+      paste0("bayesian_network_", Sys.Date(), ".png")
+    },
+    content = function(file) {
+      png(file, width = 1200, height = 800, res = 150)
+      if(requireNamespace("bnlearn", quietly = TRUE) && requireNamespace("Rgraphviz", quietly = TRUE)) {
+        bnlearn::graphviz.plot(values$bayesian_result$averaged_network)
+      } else {
+        plot.new()
+        text(0.5, 0.5, "需要安装Rgraphviz包", cex = 2)
+      }
+      dev.off()
+    }
+  )
+  
+  output$download_bn_edges <- downloadHandler(
+    filename = function() {
+      paste0("bayesian_edges_", Sys.Date(), ".csv")
+    },
+    content = function(file) {
+      write.csv(values$bayesian_result$stable_edges, file, row.names = FALSE)
+    }
+  )
+  
+  output$download_bn_report <- downloadHandler(
+    filename = function() {
+      paste0("bayesian_report_", Sys.Date(), ".html")
+    },
+    content = function(file) {
+      report_content <- generate_bayesian_report(values$bayesian_result)
+      writeLines(report_content, file)
+    }
+  )
 }
 
 # =============================================================================
