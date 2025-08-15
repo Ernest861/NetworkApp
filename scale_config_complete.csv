@@ -1,0 +1,71 @@
+scale_name,scale_type,item_prefix,item_numbers,reverse_items,min_valid_items,calculation_method,subscales_definition,special_logic,reliability_check,validity_check,notes
+NSSI_HRF,questionnaire,HRF18_NSSI_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",,14,sum,"Habit:3,6,7,10,14,16|Reward:2,4,9,12,15,17|Fear:1,5,8,11,13,18",,TRUE,TRUE,Habit-Reward-Fear NSSI Scale
+HRF18_General,questionnaire,HRF18_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",,14,sum,"Habit:3,6,7,10,14,16|Reward:2,4,9,12,15,17|Fear:1,5,8,11,13,18",,TRUE,TRUE,Habit-Reward-Fear 18-item General Scale
+NSSI_DSM5,questionnaire,NSSI_DSM5_,"1,2,3,4,5,6",,5,special,"dsm1:1|dsm2:2,3,4,5,6|dsm3:7,8,9,10|dsm4:4|dsm5:5|dsm6:6",recode_1_5to1;dsm_binary_logic,TRUE,TRUE,NSSI DSM-5 Diagnostic Criteria
+YFAS13,questionnaire,mYFAS2_13_,"1,2,3,4,5,6,7,8,9,10,11,12,13",,10,threshold,Taken:1>3|Unsuccessful:11>4|Time:2>4|Knowledge:3>1|GiveUp:8>3|Tolerance:9>4|Withdrawal:4>3|Social:13>1|Failure:7>1|Hazardous:12>1|Craving:10>3|Clinical:5>4OR6>4,minus_1_first;threshold_scoring;diagnosis_logic,TRUE,TRUE,Yale Food Addiction Scale-13
+YFAS16,questionnaire,mYFAS2_16_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16",,12,mean,"Taken:1,2,3|Unsuccessful:4,13,15,16|Time:5,6,7|Knowledge:10,11|Tolerance:12|Withdrawal:8,9|Craving:14",minus_1_first,TRUE,TRUE,Yale Food Addiction Scale-16
+YFAS35,questionnaire,YFAS2\.0_35_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35",,28,threshold,Taken:1>=6OR2>=6OR3>=4|Unsuccessful:4>=3OR25>=6OR31>=5OR32>=5|Time:5>=5OR6>=6OR7>=6|Knowledge:8>=3OR10>=2OR18>=3OR20>=3|GiveUp:22>=4OR23>=5|Tolerance:24>=5OR26>=5|Withdrawal:11>=4OR12>=5OR13>=4OR14>=4OR15>=6|Social:9>=2OR21>=3OR35>=2|Failure:19>=2OR27>=2|Hazardous:28>=4OR33>=2OR34>=3|Craving:29>=4OR30>=5|Clinical:16>=5OR17>=5,minus_1_first;threshold_scoring;diagnosis_logic,TRUE,TRUE,Yale Food Addiction Scale-35
+CFPS1,questionnaire,CFPS1_15_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15","3,7,12",12,mean,"Open1:4,9,14|Cons1:1,7,11|Extr1:2,8,12|Agre1:3,6,13|Neur1:5,10,15",reverse_6minus,TRUE,TRUE,Big Five Personality Scale Version 1
+CFPS2,questionnaire,CFPS2_15_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15","3,7,12",12,mean,"Open2:4,9,14|Cons2:1,7,11|Extr2:2,8,12|Agre2:3,6,13|Neur2:5,10,15",reverse_6minus,TRUE,TRUE,Big Five Personality Scale Version 2
+CFPS3,questionnaire,CFPS3_15_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15","3,7,12",12,mean,"Open3:4,9,14|Cons3:1,7,11|Extr3:2,8,12|Agre3:3,6,13|Neur3:5,10,15",reverse_6minus,TRUE,TRUE,Big Five Personality Scale Version 3
+IPPA,questionnaire,IPPAF25_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25","4,5,9,10,11,18,22,23",20,sum,"Trust:6,8,12,13,14,15,19,20,21,26|Communication:1,2,3,7,16,17,24,25|Alienation:4,9,10,11,18,22,23",reverse_6minus;ippa_sum_logic,TRUE,TRUE,Inventory of Parent and Peer Attachment
+STBI,questionnaire,STBI_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101",,70,special,"Ideation:1,3,5,6,7,9,10,12,14,16,19,25,27,28,30,34,35,36,37,39,40,42,43,46,48,49,51,52,55,59,62,63,68,70,73,75,79,80,82,84,85,87,89,94,96,97,98,100,101|Functions:2,4,8,11,13,15,17,18,20,21,22,23,24,26,29,31,32,33,38,41,44,45,47,50,53,54,56,57,58,60,61,64,65,66,67,69,71,72,74,76,77,78,81,83,86,88,90,91,92,93,95,99",stbi_severity_assessment,TRUE,TRUE,Self-injury Thoughts and Behaviors Interview
+RICS25,questionnaire,RICS25_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25","2,4,6,8,12,14,16,18,20,22,24",18,mean,"PersonalStrength:1,7,11,15,19,23,25|SocialSupport:2,4,6,8,12,14,16,18,20,22,24|StructuredStyle:3,5,9,10,13,17,21",reverse_5minus,TRUE,TRUE,Resilience in Illness Scale-25
+HRF18_IA,questionnaire,HRF18_IA_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",,14,sum,"Habit:3,6,7,10,14,16|Reward:2,4,9,12,15,17|Fear:1,5,8,11,13,18",,TRUE,TRUE,Habit-Reward-Fear Internet Addiction Scale
+HRF18_YFAS,questionnaire,HRF18_YFAS_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",,14,sum,"Habit:3,6,7,10,14,16|Reward:2,4,9,12,15,17|Fear:1,5,8,11,13,18",,TRUE,TRUE,Habit-Reward-Fear Food Addiction Scale
+HRF18_AUD,questionnaire,HRF18_AUD_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",,14,sum,"Habit:3,6,7,10,14,16|Reward:2,4,9,12,15,17|Fear:1,5,8,11,13,18",,TRUE,TRUE,Habit-Reward-Fear Alcohol Use Disorder Scale
+FFSSS10,questionnaire,FFSSS10_,"1,2,3,4,5,6,7,8,9,10",,8,sum,,,TRUE,TRUE,Family Financial Social Support Scale-10
+Friend_SNS,questionnaire,Friend_SNS6_,"1,2,3,4,5,6,7,8,9,10,11",,8,sum,,,TRUE,TRUE,Friend Social Network Scale
+Friend20,questionnaire,Friend20_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20",,16,sum,,,TRUE,TRUE,Friend Support Scale-20
+NSSI_variations,questionnaire,NSSI_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50",,35,sum,,,TRUE,TRUE,Non-Suicidal Self-Injury Scale - Various Forms
+BIS11,questionnaire,BIS11_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30","1,7,8,9,10,12,13,15,20,29,30",21,sum,"Attention:5,9,11,20,28|Motor:2,3,4,17,19,22,25|NonPlanning:1,7,8,12,13,14,15,18,27,29,30",reverse_5minus,TRUE,TRUE,Barratt Impulsiveness Scale-11
+NSSIK24_full,questionnaire,NSSIK24_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24",,17,sum,,,TRUE,TRUE,Non-Suicidal Self-Injury Questionnaire-24
+BISBAS18,questionnaire,BISBAS18_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18","2,22",13,sum,"BIS:2,8,13,16,22|BAS_Drive:3,9,12,21|BAS_Fun:5,10,15,20|BAS_Reward:4,7,14,18,23",reverse_5minus,TRUE,TRUE,Behavioral Inhibition System/Behavioral Activation System
+OCI18,questionnaire,OCI18_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",,13,sum,"Washing:1,7,13|Checking:2,8,14|Ordering:3,9,15|Obsessing:4,10,16|Hoarding:5,11,17|Neutralizing:6,12,18",,TRUE,TRUE,Obsessive-Compulsive Inventory-18
+EISA23,questionnaire,EISA23_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23",,16,sum,,,TRUE,TRUE,Emotional Intelligence Scale A-23
+EISB21,questionnaire,EISB21_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21",,15,sum,,,TRUE,TRUE,Emotional Intelligence Scale B-21
+CGPS18,questionnaire,CGPS18_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",,13,sum,,,TRUE,TRUE,Chinese Gaming Passion Scale-18
+GDSS18,questionnaire,GDSS18_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",,13,sum,,,TRUE,TRUE,Gaming Disorder Screening Scale-18
+PPS14,questionnaire,PPS14_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14",,10,sum,,,TRUE,TRUE,Perceived Pressure Scale-14
+SSS14,questionnaire,SSS14_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14",,10,sum,,,TRUE,TRUE,Social Support Scale-14
+PPC12,questionnaire,PPC12_,"1,2,3,4,5,6,7,8,9,10,11,12",,9,sum,,,TRUE,TRUE,Problematic Phone Use Scale-12
+AIMS10,questionnaire,AIMS10_,"1,2,3,4,5,6,7,8,9,10",,7,sum,,,TRUE,TRUE,Addiction Internet Motivation Scale-10
+ERP10,questionnaire,ERP10_,"1,2,3,4,5,6,7,8,9,10",,7,sum,,,TRUE,TRUE,Emotion Regulation Profile-10
+Cbed10,questionnaire,Cbed10_,"1,2,3,4,5,6,7,8,9,10",,7,sum,,,TRUE,TRUE,Compulsive Bed Eating Disorder-10
+CNCS10,questionnaire,CNCS10_,"1,2,3,4,5,6,7,8,9,10",,7,sum,,,TRUE,TRUE,Chinese Night-Eating Syndrome Scale-10
+BAS10,questionnaire,BAS10_,"1,2,3,4,5,6,7,8,9,10",,7,sum,,,TRUE,TRUE,Behavioral Activation Scale-10
+UCLA20,questionnaire,UCLA20_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20","1,5,6,9,10,15,16,19,20",16,sum,"Closeness:2,3,7,8,11,12,13,14,17,18|Social:10,15,16,19,20|Belonging:1,4,5,6,9,10",reverse_5minus,TRUE,TRUE,UCLA Loneliness Scale
+Parenting_Father,questionnaire,SMBUF21_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21","7,8,9,10,11,12,13,20",17,sum,"Rejection:1,2,3,4,5,6|Warmth:7,8,9,10,11,12,13|Overprotection:14,15,16,17,18,19,20,21",reverse_5minus;parenting_sum_logic,TRUE,TRUE,Parental Bonding Instrument - Father
+Parenting_Mother,questionnaire,SMBUM21_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21","7,8,9,10,11,12,13,20",17,sum,"Rejection:1,2,3,4,5,6|Warmth:7,8,9,10,11,12,13|Overprotection:14,15,16,17,18,19,20,21",reverse_5minus;parenting_sum_logic,TRUE,TRUE,Parental Bonding Instrument - Mother
+PHQ9,questionnaire,PHQ9_,"1,2,3,4,5,6,7,8,9",,7,mean,,,TRUE,TRUE,Patient Health Questionnaire-9
+GAD7,questionnaire,GAD7_,"1,2,3,4,5,6,7",,6,mean,,,TRUE,TRUE,Generalized Anxiety Disorder-7
+ERS21,questionnaire,ERS21_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21",,17,mean,"Arousal:20,19,17,21,6,3,4|Perspective:11,8,1,10|Sensitivity:9,5,15,16,18,13,2,14,12,7",,TRUE,TRUE,Emotional Reactivity Scale
+DERS16,questionnaire,DERS16_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16",,13,mean,"Awareness:1,2|Goals:3,7,15|Impulse:4,8,11|Strategies:5,6,12,14,16|Nonacceptance:9,10,13",,TRUE,TRUE,Difficulties in Emotion Regulation Scale
+COPE30,questionnaire,COPE30_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30",,24,mean,"ProblemSolving:2,10,12,16,21,24,30|HelpSeeking:5,6,7,13,14,25,28|Tolerance:15,17,18|Withdrawal:1,3,4,9,19,20|FeelVenting:11,22,26,27|Fantasy:8,23,29",,TRUE,TRUE,Coping Style Scale
+IAT20,questionnaire,IAT20_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20",,16,mean,,,TRUE,TRUE,Internet Addiction Test
+IGD9SF,questionnaire,IGD9SF,"1,2,3,4,5,6,7,8,9",,7,mean,,,TRUE,TRUE,Internet Gaming Disorder Scale
+BSMAS6,questionnaire,BSMAS6_,"1,2,3,4,5,6",,5,mean,,,TRUE,TRUE,Bergen Social Media Addiction Scale
+SABAS6,questionnaire,SABAS6_,"1,2,3,4,5,6",,5,mean,,,TRUE,TRUE,Social Media Addiction Scale
+HRF18_IA,questionnaire,HRF18_IA_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",,14,mean,"Habit:3,6,7,10,14,16|Reward:2,4,9,12,15,17|Fear:1,5,8,11,13,18",,TRUE,TRUE,Habit-Reward-Fear Internet Addiction
+HRF18_AUD,questionnaire,HRF18_AUD_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",,14,mean,"Habit:3,6,7,10,14,16|Reward:2,4,9,12,15,17|Fear:1,5,8,11,13,18",,TRUE,TRUE,Habit-Reward-Fear Alcohol Use Disorder
+AUDIT10,questionnaire,AUDIT10_,"1,2,3,4,5,6,7,8,9,10",,8,special,,audit_scoring,TRUE,TRUE,Alcohol Use Disorders Identification Test
+PSQI19,sleep_questionnaire,PSQI19_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22",,17,special,"SQ:6|SO:2,5a|ST:4_1,4_2|SE:calculated|SD:5b-5j|Sop:7|DD:8,9",psqi_complex_scoring,TRUE,TRUE,Pittsburgh Sleep Quality Index
+SES10,questionnaire,SES10_,"1,2,3,4,5,6,7,8,9,10","3,5,8,9,10",8,special,,reverse_special;ses_scoring,TRUE,TRUE,Rosenberg Self-Esteem Scale
+BIS11_30,questionnaire,BIS11_30_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30",,24,special,"NonPlanning:1,4,7,10,13,16,19,22,25,28|Action:2,5,8,11,14,17,20,23,26,29|Cognitive:3,6,9,12,15,18,21,24,27,30",bis_complex_scoring,TRUE,TRUE,Barratt Impulsiveness Scale
+Friend20,questionnaire,Friend20_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20","1,3,5,7,9,11,13,15,17,19",16,mean,"PSc:1,5,9,12,15|PSo:3,7,13|NSc:2,10,16|NIl:4,6,8,11,14",reverse_4minus,TRUE,TRUE,Friend Scale
+ERS21,questionnaire,ERS21_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21",,17,mean,"AI:20,19,17,21,6,3,4|Per:11,8,1,10|Sen:9,5,15,16,18,13,2,14,12,7",,TRUE,TRUE,Emotional Reactivity Scale
+DERS16,questionnaire,DERS16_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16",,13,mean,"Awa:1,2|Goa:3,7,15|Imp:4,8,11|Str:5,6,12,14,16|NoA:9,10,13",,TRUE,TRUE,Difficulties in Emotion Regulation Scale
+COPE30,questionnaire,COPE30_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30",,24,mean,"PrS:2,10,12,16,21,24,30|HeS:5,6,7,13,14,25,28|Tol:15,17,18|Wit:1,3,4,9,19,20|FeV:11,22,26,27|Fan:8,23,29",,TRUE,TRUE,Coping Style Scale
+AAS5,questionnaire,AAS5_,"1,2,3,4,5","2,3",4,special,,aas_special_scoring,TRUE,TRUE,Animal Attitude Scale
+MSSMHS60,questionnaire,MSSMHS60_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60",,48,mean,,,TRUE,TRUE,Chinese Middle School Mental Health Scale
+COVID19,questionnaire,COVID19_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14",,10,special,,covid_scoring,TRUE,TRUE,COVID-19 Symptoms Scale
+MHT100,questionnaire,MHT100_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100","84,94,96",80,sum,"AaL:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15|AaP:16,17,18,19,20,21,22,23,24,25|LoT:26,27,28,29,30,31,32,33,34,35|SbT:36,37,38,39,40,41,42,43,44,45|AlT:46,47,48,49,50,51,52,53,54,55|PhS:56,57,58,59,60,61,62,63,64,65,66,67,68,69,70|TeT:71,72,73,74,75,76,77,78,79,80|ImT:81,83,85,87,89,91,93,95,97,99|VaS:82,84,86,88,90,92,94,96,98,100",mht_reverse_scoring,TRUE,TRUE,Mental Health Test-100
+CBul10,questionnaire,CBul10_,"1,2,3,4,5,6,7,8,9,10",,8,mean,,,TRUE,TRUE,Cyber Bullying Scale
+CBed10,questionnaire,CBed10_,"1,2,3,4,5,6,7,8,9,10",,8,mean,,,TRUE,TRUE,Cyber Bullying Victimization Scale
+Bul12,questionnaire,Bul12_,"1,2,3,4,5,6,7,8,9,10,11,12",,10,mean,"VB:1,4,7,10|PB:2,5,8,11|SB:3,6,9,12",,TRUE,TRUE,Delaware Bullying Victimization Scale
+RISC25,questionnaire,RISC25_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25",,20,mean,,,TRUE,TRUE,Resilience Scale
+OCD20,questionnaire,OCD20_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20",,16,mean,,,TRUE,TRUE,Obsessive-Compulsive Disorder Scale
+CSES26,questionnaire,CSES26_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26","3,4,10,17,20,22,23,26",21,special,,cses_reverse_scoring,TRUE,TRUE,Children Self-Esteem Scale
+RSCA27,questionnaire,RSCA27_,"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27","1,2,5,6,9,12,16,17,26,27",22,special,,rsca_reverse_scoring,TRUE,TRUE,Resilience Scale for Adults
+FoMos8,questionnaire,FoMos8_,"1,2,3,4,5,6,7,8",,6,mean,"FoI:1,2,3,4|FoS:5,6,7,8",,TRUE,TRUE,Fear of Missing out Shopping
+DSMIA9,questionnaire,DSMIA9_,"1,2,3,4,5,6,7,8,9",,7,mean,,,TRUE,TRUE,DSM Internet Addiction

@@ -4,6 +4,8 @@
 # =============================================================================
 
 source("config.R")
+source("story_generator.R")
+source("scale_calculator.R")
 
 # =============================================================================
 # 数据解析和验证函数
@@ -90,7 +92,7 @@ auto_detect_scales <- function(col_names) {
   return(detected)
 }
 
-#' 数据验证函数
+#' 简化的数据验证函数 - 只检查缺失值和数值类型
 #' @param data 输入数据
 #' @return 验证结果列表
 validate_data <- function(data) {
@@ -98,41 +100,111 @@ validate_data <- function(data) {
     valid = TRUE,
     warnings = c(),
     errors = c(),
-    statistics = list()
+    statistics = list(),
+    data_types = list()
   )
   
   n_subjects <- nrow(data)
   n_variables <- ncol(data)
   
-  # 检查样本量
-  if(n_subjects < VALIDATION_RULES$min_subjects) {
-    validation_result$errors <- c(validation_result$errors, 
-                                 paste0("样本量过少：", n_subjects, " < ", VALIDATION_RULES$min_subjects))
+  # 基本数据检查
+  if(n_subjects == 0) {
+    validation_result$errors <- c(validation_result$errors, "数据为空")
     validation_result$valid <- FALSE
+    return(validation_result)
   }
   
-  if(n_subjects > VALIDATION_RULES$max_subjects) {
-    validation_result$warnings <- c(validation_result$warnings,
-                                   paste0("样本量较大：", n_subjects, "，分析可能需要较长时间"))
+  if(n_variables == 0) {
+    validation_result$errors <- c(validation_result$errors, "没有变量列")
+    validation_result$valid <- FALSE
+    return(validation_result)
   }
   
   # 检查缺失值
   missing_rates <- colSums(is.na(data)) / n_subjects
-  problematic_vars <- names(missing_rates)[missing_rates > VALIDATION_RULES$max_missing_per_variable]
+  high_missing_vars <- names(missing_rates)[missing_rates > 0.5]
   
-  if(length(problematic_vars) > 0) {
+  if(length(high_missing_vars) > 0) {
     validation_result$warnings <- c(validation_result$warnings,
-                                   paste0("以下变量缺失值过多：", paste(problematic_vars, collapse = ", ")))
+                                   paste0("以下变量缺失值超过50%：", paste(high_missing_vars, collapse = ", ")))
   }
   
   # 整体完整率
   complete_cases <- sum(complete.cases(data))
   complete_rate <- complete_cases / n_subjects
   
-  if(complete_rate < VALIDATION_RULES$min_valid_rate) {
-    validation_result$errors <- c(validation_result$errors,
-                                 paste0("数据完整率过低：", round(complete_rate * 100, 1), "%"))
-    validation_result$valid <- FALSE
+  # 检查数据类型并尝试转换
+  numeric_conversion_summary <- list()
+  converted_vars <- character(0)
+  
+  for(col_name in names(data)) {
+    col_data <- data[[col_name]]
+    original_type <- class(col_data)[1]
+    
+    # 跳过明显的ID列和字符列
+    if(grepl("^(id|ID|uuid|UUID|name|Name|gender|Gender|city|City)", col_name, ignore.case = TRUE)) {
+      numeric_conversion_summary[[col_name]] <- list(
+        original_type = original_type,
+        converted = FALSE,
+        reason = "ID或分类变量"
+      )
+      next
+    }
+    
+    # 尝试数值转换
+    if(original_type %in% c("character", "factor")) {
+      tryCatch({
+        numeric_version <- as.numeric(as.character(col_data))
+        non_na_converted <- sum(!is.na(numeric_version))
+        non_na_original <- sum(!is.na(col_data))
+        
+        # 如果转换后非空值的数量相同或接近，则认为转换成功
+        if(non_na_converted >= non_na_original * 0.8) {
+          data[[col_name]] <- numeric_version
+          converted_vars <- c(converted_vars, col_name)
+          
+          numeric_conversion_summary[[col_name]] <- list(
+            original_type = original_type,
+            converted = TRUE,
+            success_rate = non_na_converted / non_na_original
+          )
+        } else {
+          numeric_conversion_summary[[col_name]] <- list(
+            original_type = original_type,
+            converted = FALSE,
+            reason = "转换失败率过高"
+          )
+        }
+      }, error = function(e) {
+        numeric_conversion_summary[[col_name]] <- list(
+          original_type = original_type,
+          converted = FALSE,
+          reason = paste("转换错误:", e$message)
+        )
+      })
+    } else if(original_type == "integer") {
+      # 整数转换为数值
+      data[[col_name]] <- as.numeric(col_data)
+      converted_vars <- c(converted_vars, col_name)
+      
+      numeric_conversion_summary[[col_name]] <- list(
+        original_type = original_type,
+        converted = TRUE,
+        reason = "整数转数值"
+      )
+    } else {
+      numeric_conversion_summary[[col_name]] <- list(
+        original_type = original_type,
+        converted = FALSE,
+        reason = "已是数值类型或无需转换"
+      )
+    }
+  }
+  
+  # 汇总转换信息
+  if(length(converted_vars) > 0) {
+    validation_result$warnings <- c(validation_result$warnings,
+                                   paste0("已自动转换", length(converted_vars), "个变量为数值类型"))
   }
   
   # 统计信息
@@ -141,8 +213,12 @@ validate_data <- function(data) {
     n_variables = n_variables,
     complete_cases = complete_cases,
     complete_rate = complete_rate,
-    missing_rates = missing_rates
+    missing_rates = missing_rates,
+    converted_variables = length(converted_vars)
   )
+  
+  validation_result$data_types <- numeric_conversion_summary
+  validation_result$processed_data <- data  # 返回处理后的数据
   
   return(validation_result)
 }
@@ -419,6 +495,226 @@ export_analysis_results <- function(network_result, centrality_result = NULL,
   }
   
   return(files)
+}
+
+#' 获取中心性图
+#' @param centrality_result 中心性结果
+#' @return ggplot对象或plot输出
+get_centrality_plot <- function(centrality_result) {
+  if(is.null(centrality_result)) {
+    return(NULL)
+  }
+  
+  # 尝试使用quickNet包的内置绘图功能
+  tryCatch({
+    if(requireNamespace("quickNet", quietly = TRUE)) {
+      # 检查centrality_result的结构
+      if(is.list(centrality_result)) {
+        # 如果是列表结构，检查是否有centralityPlot组件
+        if("centralityPlot" %in% names(centrality_result)) {
+          # 使用已存在的centralityPlot
+          if(inherits(centrality_result$centralityPlot, "ggplot")) {
+            print(centrality_result$centralityPlot)
+          } else {
+            # 如果centralityPlot不是ggplot对象，尝试直接绘制
+            plot(centrality_result$centralityPlot)
+          }
+        } else if("centrality" %in% names(centrality_result)) {
+          # 如果有centrality数据，使用quickNet绘制
+          quickNet::centralityPlot(centrality_result$centrality)
+        } else {
+          # 尝试直接将结果传递给centralityPlot
+          quickNet::centralityPlot(centrality_result)
+        }
+      } else if(inherits(centrality_result, c("qgraph", "bn.strength", "data.frame"))) {
+        # 直接使用quickNet的centrality绘图函数
+        quickNet::centralityPlot(centrality_result)
+      } else {
+        # 尝试直接绘制
+        plot(centrality_result)
+      }
+    } else {
+      # 备用方案：创建简单的中心性图
+      create_enhanced_centrality_plot(centrality_result)
+    }
+  }, error = function(e) {
+    # 如果quickNet方法失败，尝试使用备用方案
+    tryCatch({
+      create_enhanced_centrality_plot(centrality_result)
+    }, error = function(e2) {
+      # 最后的备用方案：显示错误信息并尝试基础绘图
+      cat("中心性图生成失败，尝试基础绘图\n")
+      cat("错误信息:", e$message, "\n")
+      cat("中心性结果结构:", str(centrality_result), "\n")
+      
+      # 尝试基础绘图
+      if(is.list(centrality_result) && length(centrality_result) > 0) {
+        plot.new()
+        text(0.5, 0.6, "中心性图", cex = 1.5, font = 2)
+        text(0.5, 0.4, paste("包含", length(centrality_result), "个组件"), cex = 1.2)
+        text(0.5, 0.2, "请检查数据格式", cex = 1, col = "orange")
+      } else {
+        plot.new()
+        text(0.5, 0.5, paste("中心性图生成失败:", e$message), cex = 1.2, col = "red")
+      }
+    })
+  })
+}
+
+#' 获取组间比较图
+#' @param compare_result NetCompare结果
+#' @param reference_network 参考网络对象
+#' @param plot_type 图类型："all", "positive", "negative"
+#' @return 组间比较图
+get_compare_plot <- function(compare_result, reference_network, plot_type = "all") {
+  if(is.null(compare_result)) {
+    return(NULL)
+  }
+  
+  tryCatch({
+    if(requireNamespace("quickNet", quietly = TRUE)) {
+      # 检查可用的绘图函数
+      available_functions <- ls("package:quickNet")
+      
+      if("get_compare_plot" %in% available_functions) {
+        # 使用get_compare_plot函数
+        if(plot_type == "positive") {
+          quickNet::get_compare_plot(compare_result, reference_network, 
+                                    prefix = "pos", width = 6, height = 4.5, 
+                                    plot_positive = TRUE, plot_negative = FALSE)
+        } else if(plot_type == "negative") {
+          quickNet::get_compare_plot(compare_result, reference_network,
+                                    prefix = "neg", width = 6, height = 4.5,
+                                    plot_positive = FALSE, plot_negative = TRUE)
+        } else {
+          quickNet::get_compare_plot(compare_result, reference_network,
+                                    prefix = "diff", width = 6, height = 4.5)
+        }
+      } else if("plot_comparison" %in% available_functions) {
+        # 尝试使用plot_comparison函数
+        quickNet::plot_comparison(compare_result, reference_network)
+      } else if("plotDifference" %in% available_functions) {
+        # 尝试使用plotDifference函数
+        quickNet::plotDifference(compare_result)
+      } else {
+        # 如果没有找到合适的函数，使用备用方案
+        cat("未找到quickNet组间比较绘图函数，使用备用方案\n")
+        create_simple_compare_plot(compare_result, plot_type)
+      }
+    } else {
+      # 备用方案：创建简单的差异图
+      create_simple_compare_plot(compare_result, plot_type)
+    }
+  }, error = function(e) {
+    # 如果quickNet方法失败，使用备用方案
+    cat("quickNet绘图失败:", e$message, "\n")
+    tryCatch({
+      create_simple_compare_plot(compare_result, plot_type)
+    }, error = function(e2) {
+      # 最后的备用方案：显示错误信息
+      plot.new()
+      text(0.5, 0.5, paste("组间比较图生成失败:", e$message), cex = 1.2, col = "red")
+    })
+  })
+}
+
+#' 创建简单的组间比较图（备用方案）
+#' @param compare_result NetCompare结果
+#' @param plot_type 图类型
+create_simple_compare_plot <- function(compare_result, plot_type = "all") {
+  if(!requireNamespace("ggplot2", quietly = TRUE)) {
+    plot.new()
+    text(0.5, 0.5, "需要ggplot2包来生成比较图", cex = 1.2, col = "red")
+    return()
+  }
+  
+  library(ggplot2, quietly = TRUE)
+  
+  # 检查compare_result的结构
+  cat("比较结果结构:", str(compare_result), "\n")
+  
+  # 尝试多种数据提取方式
+  diff_data <- NULL
+  
+  if(is.list(compare_result)) {
+    # 方式1：检查standard NetCompare输出格式
+    if(!is.null(compare_result$difference) && !is.null(compare_result$p.adjust)) {
+      diff_data <- data.frame(
+        edge = names(compare_result$difference),
+        difference = compare_result$difference,
+        p_value = compare_result$p.adjust,
+        significant = compare_result$p.adjust < 0.05,
+        stringsAsFactors = FALSE
+      )
+    }
+    # 方式2：检查是否有pval字段
+    else if(!is.null(compare_result$difference) && !is.null(compare_result$pval)) {
+      diff_data <- data.frame(
+        edge = names(compare_result$difference),
+        difference = compare_result$difference,
+        p_value = compare_result$pval,
+        significant = compare_result$pval < 0.05,
+        stringsAsFactors = FALSE
+      )
+    }
+    # 方式3：检查是否有直接的结果矩阵
+    else if(!is.null(compare_result$result)) {
+      result_df <- compare_result$result
+      if("difference" %in% names(result_df) && "p_value" %in% names(result_df)) {
+        diff_data <- data.frame(
+          edge = rownames(result_df),
+          difference = result_df$difference,
+          p_value = result_df$p_value,
+          significant = result_df$p_value < 0.05,
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+  }
+  
+  if(!is.null(diff_data) && nrow(diff_data) > 0) {
+    # 根据plot_type过滤数据
+    if(plot_type == "positive") {
+      diff_data <- diff_data[diff_data$difference > 0, ]
+    } else if(plot_type == "negative") {
+      diff_data <- diff_data[diff_data$difference < 0, ]
+    }
+    
+    if(nrow(diff_data) > 0) {
+      # 创建简单的柱状图，使用与网络图一致的颜色
+      diff_data$color_type <- ifelse(diff_data$difference > 0, "positive", "negative")
+      
+      p <- ggplot(diff_data, aes(x = reorder(edge, difference), y = difference, 
+                                fill = color_type, alpha = significant)) +
+        geom_col() +
+        scale_fill_manual(values = c("positive" = "#2376b7", "negative" = "#d2568c"),
+                         labels = c("positive" = "组1>组2", "negative" = "组2>组1")) +
+        scale_alpha_manual(values = c("FALSE" = 0.5, "TRUE" = 1.0),
+                          labels = c("FALSE" = "不显著", "TRUE" = "显著")) +
+        labs(title = paste0("组间网络差异"),
+             x = "网络边", y = "差异值 (组1 - 组2)",
+             fill = "差异方向", alpha = "显著性") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              legend.position = "bottom")
+      
+      print(p)
+    } else {
+      plot.new()
+      text(0.5, 0.5, paste0("没有", plot_type, "类型的差异数据"), cex = 1.2, col = "orange")
+    }
+  } else {
+    # 显示比较结果的基本信息
+    plot.new()
+    if(is.list(compare_result)) {
+      available_fields <- names(compare_result)
+      text(0.5, 0.7, "组间比较结果", cex = 1.5, font = 2)
+      text(0.5, 0.5, paste("可用字段:", paste(available_fields, collapse = ", ")), cex = 1)
+      text(0.5, 0.3, "请检查NetCompare结果格式", cex = 1, col = "orange")
+    } else {
+      text(0.5, 0.5, "比较结果数据格式不支持", cex = 1.2, col = "red")
+    }
+  }
 }
 
 # =============================================================================
@@ -782,16 +1078,59 @@ conduct_likert_bayesian_analysis <- function(data,
 
 #' 生成贝叶斯网络分析报告
 #' @param bayesian_result 贝叶斯网络分析结果
+#' @param detected_scales 检测到的量表信息（可选）
+#' @param network_result 网络分析结果（可选）
 #' @return HTML格式的报告字符串
-generate_bayesian_report <- function(bayesian_result) {
+generate_bayesian_report <- function(bayesian_result, detected_scales = NULL, network_result = NULL) {
   
   params <- bayesian_result$parameters
   stable_count <- nrow(bayesian_result$stable_edges)
   total_possible_edges <- params$variable_count * (params$variable_count - 1)
   
+  # 生成智能故事（如果有量表信息）
+  smart_story <- ""
+  if (!is.null(detected_scales)) {
+    tryCatch({
+      smart_story <- generate_smart_story(detected_scales, network_result, bayesian_result)
+    }, error = function(e) {
+      smart_story <- ""  # 如果故事生成失败，使用空字符串
+    })
+  }
+  
   report_html <- paste0(
     "<h2>🧠 贝叶斯网络分析报告</h2>",
     "<p><strong>生成时间：</strong>", Sys.time(), "</p>",
+    "<hr>",
+    
+    # 智能故事（如果生成成功）
+    if (nchar(smart_story) > 0) smart_story else "",
+    
+    # 第三步故事引导
+    "<div class='alert alert-success'>",
+    "<h4>📝 侦探故事 - 第三步：整理证据链</h4>",
+    "<p>恭喜！您已经完成了完整的心理网络探索之旅：</p>",
+    "<ol>",
+    "<li><strong>🔍 发现线索</strong>：网络分析揭示了变量间的相关模式</li>",
+    "<li><strong>🧠 推理方向</strong>：贝叶斯分析推断出因果关系方向</li>", 
+    "<li><strong>📖 构建理论</strong>：现在可以整理出完整的理论故事</li>",
+    "</ol>",
+    "<p><strong>💡 如何解读结果：</strong>关注<strong>稳定边</strong>（强度≥0.85），",
+    "这些代表最可靠的因果关系！</p>",
+    "</div>",
+    
+    # 添加具体案例故事
+    "<div class='panel panel-info'>",
+    "<div class='panel-heading'><h5>🔍 案例故事：酒精使用与心理健康</h5></div>",
+    "<div class='panel-body'>",
+    "<p><strong>研究发现的可能故事线：</strong></p>",
+    "<ul>",
+    "<li><strong>恐惧动机 → 酒精使用：</strong>恐惧和焦虑驱动个体通过酒精来应对压力</li>",
+    "<li><strong>酒精使用 → 抑郁症状：</strong>长期酒精使用导致情绪调节能力下降</li>",
+    "<li><strong>习惯动机 ← 酒精使用：</strong>重复使用酒精形成习惯性动机模式</li>",
+    "</ul>",
+    "<p class='text-muted'><em>注意：这只是假设性解释，具体结果需要基于您的实际数据！</em></p>",
+    "</div>",
+    "</div>",
     "<hr>",
     
     "<h3>📊 分析参数</h3>",
@@ -853,4 +1192,251 @@ generate_bayesian_report <- function(bayesian_result) {
   )
   
   return(report_html)
+}
+
+# =============================================================================
+# 分析代码生成和记录功能
+# =============================================================================
+
+#' 生成完整的分析代码
+#' @param analysis_params 分析参数列表
+#' @param data_info 数据信息
+#' @param variable_selection 变量选择信息
+#' @param network_params 网络分析参数
+#' @param stability_params 稳定性分析参数
+#' @param group_compare_params 组间比较参数（可选）
+#' @return 完整的R代码字符串
+generate_analysis_code <- function(analysis_params, data_info = NULL, variable_selection = NULL, 
+                                 network_params = NULL, stability_params = NULL, 
+                                 group_compare_params = NULL) {
+  
+  # 生成代码头部
+  code_lines <- c(
+    "# =============================================================================",
+    "# 心理量表网络分析 - 自动生成代码",
+    paste("# 生成时间:", Sys.time()),
+    "# =============================================================================",
+    "",
+    "# 加载必要的包",
+    "library(dplyr)",
+    "library(ggplot2)",
+    "library(bootnet)",
+    "library(qgraph)",
+    "",
+    "# 如果需要quickNet包，请先安装:",
+    "# devtools::install_github('LeiGuo0812/quickNet')",
+    "library(quickNet)",
+    "",
+    "# =============================================================================",
+    "# 1. 数据加载和预处理",
+    "# =============================================================================",
+    ""
+  )
+  
+  # 数据加载部分
+  if (!is.null(data_info)) {
+    code_lines <- c(code_lines,
+      paste("# 原始数据包含", data_info$n_subjects, "个样本,", data_info$n_variables, "个变量"),
+      "# 请将您的数据文件路径替换为实际路径",
+      "data <- read.csv('your_data_file.csv', stringsAsFactors = FALSE)",
+      "",
+      "# 数据基本信息",
+      paste("# 样本量:", data_info$n_subjects),
+      paste("# 变量数:", data_info$n_variables),
+      if (!is.null(data_info$missing_rate)) paste("# 缺失率:", round(data_info$missing_rate * 100, 1), "%") else "",
+      ""
+    )
+  }
+  
+  # 变量选择部分
+  if (!is.null(variable_selection)) {
+    code_lines <- c(code_lines,
+      "# =============================================================================",
+      "# 2. 变量选择和筛选",
+      "# =============================================================================",
+      ""
+    )
+    
+    # 为每个量表生成变量选择代码
+    for (scale_name in names(variable_selection)) {
+      scale_info <- variable_selection[[scale_name]]
+      code_lines <- c(code_lines,
+        paste("# 量表:", scale_name),
+        paste("# 选择层级:", scale_info$level),
+        paste(scale_name, "_variables <- c(", paste0("'", scale_info$variables, "'", collapse = ", "), ")"),
+        ""
+      )
+    }
+    
+    # 合并所有变量
+    code_lines <- c(code_lines,
+      "# 合并所有分析变量",
+      "analysis_variables <- c(",
+      paste("  ", paste(names(variable_selection), "_variables", sep = "", collapse = ",\n  ")),
+      ")",
+      "",
+      "# 提取分析数据",
+      "analysis_data <- data[, analysis_variables]",
+      "",
+      "# 检查数据完整性",
+      "cat('最终分析变量数:', length(analysis_variables), '\\n')",
+      "cat('数据维度:', dim(analysis_data), '\\n')",
+      "cat('缺失值统计:\\n')",
+      "print(colSums(is.na(analysis_data)))",
+      ""
+    )
+  }
+  
+  # 网络分析部分
+  if (!is.null(network_params)) {
+    code_lines <- c(code_lines,
+      "# =============================================================================",
+      "# 3. 网络分析",
+      "# =============================================================================",
+      "",
+      "# 网络估计参数",
+      paste("network_method <- '", network_params$method %||% "EBICglasso", "'", sep = ""),
+      paste("tuning_param <- ", network_params$tuning %||% 0.5),
+      paste("threshold <- ", network_params$threshold %||% 0.05),
+      "",
+      "# 估计网络结构",
+      "if (network_method == 'EBICglasso') {",
+      "  # EBIC高斯石墨模型",
+      "  network_result <- estimateNetwork(analysis_data, ",
+      "                                   default = 'EBICglasso',",
+      "                                   tuning = tuning_param)",
+      "} else if (network_method == 'quickNet') {",
+      "  # quickNet方法",
+      "  network_result <- quickNet(analysis_data, method = 'glasso')",
+      "}",
+      "",
+      "# 网络可视化",
+      "plot(network_result, ",
+      "     layout = 'spring',",
+      "     theme = 'colorblind',",
+      "     title = '心理量表网络分析')",
+      "",
+      "# 中心性分析",
+      "centrality_result <- centralityPlot(network_result, ",
+      "                                   include = c('Strength', 'Closeness', 'Betweenness'))",
+      ""
+    )
+  }
+  
+  # 稳定性分析部分
+  if (!is.null(stability_params)) {
+    code_lines <- c(code_lines,
+      "# =============================================================================",
+      "# 4. 稳定性分析",
+      "# =============================================================================",
+      "",
+      paste("# Bootstrap参数"),
+      paste("bootstrap_n <- ", stability_params$bootstrap_n %||% 1000),
+      paste("bootstrap_type <- c('", paste(stability_params$bootstrap_type %||% c("nonparametric", "case"), collapse = "', '"), "')", sep = ""),
+      "",
+      "# 运行Bootstrap稳定性分析",
+      "stability_result <- bootnet(network_result,",
+      "                           nBoots = bootstrap_n,",
+      "                           type = bootstrap_type)",
+      "",
+      "# 边稳定性检验",
+      "plot(stability_result, ",
+      "     labels = FALSE, ",
+      "     order = 'sample')",
+      "",
+      "# 中心性稳定性检验", 
+      "stability_centrality <- bootnet(network_result,",
+      "                               nBoots = bootstrap_n,",
+      "                               type = 'case')",
+      "",
+      "plot(stability_centrality, ",
+      "     statistics = c('strength', 'closeness', 'betweenness'))",
+      "",
+      "# 稳定性系数计算",
+      "corStability(stability_centrality)",
+      ""
+    )
+  }
+  
+  # 组间比较部分
+  if (!is.null(group_compare_params)) {
+    code_lines <- c(code_lines,
+      "# =============================================================================",
+      "# 5. 组间比较分析",
+      "# =============================================================================",
+      "",
+      paste("# 分组变量:", group_compare_params$group_var),
+      paste("# 分组方法:", group_compare_params$method %||% "split"),
+      "",
+      "# 准备分组数据",
+      if (group_compare_params$method == "split") {
+        paste("split_value <- ", group_compare_params$split_value %||% "median(data[[group_compare_params$group_var]], na.rm = TRUE)")
+      } else {
+        paste("group_levels <- c('", paste(group_compare_params$group_levels, collapse = "', '"), "')", sep = "")
+      },
+      "",
+      "# 分组网络估计",
+      "if (network_method == 'EBICglasso') {",
+      "  group1_data <- analysis_data[group_condition_1, ]",
+      "  group2_data <- analysis_data[group_condition_2, ]",
+      "  ",
+      "  group1_network <- estimateNetwork(group1_data, default = 'EBICglasso')",
+      "  group2_network <- estimateNetwork(group2_data, default = 'EBICglasso')",
+      "}",
+      "",
+      "# 网络比较分析",
+      "library(NetworkComparisonTest)  # 需要安装此包",
+      "comparison_result <- NCT(group1_data, group2_data, ",
+      "                        it = 1000,  # 置换次数",
+      "                        test.edges = TRUE,",
+      "                        edges = 'all')",
+      "",
+      "# 查看比较结果",
+      "summary(comparison_result)",
+      "",
+      "# 差异网络可视化",
+      "diff_network <- comparison_result$einv.pvals < 0.05",
+      "qgraph(diff_network, ",
+      "       layout = 'spring',",
+      "       title = '组间差异网络')",
+      ""
+    )
+  }
+  
+  # 结果保存部分
+  code_lines <- c(code_lines,
+    "# =============================================================================",
+    "# 6. 结果保存",
+    "# =============================================================================",
+    "",
+    "# 保存网络对象",
+    "saveRDS(network_result, 'network_result.rds')",
+    "",
+    "# 保存稳定性结果",
+    if (!is.null(stability_params)) "saveRDS(stability_result, 'stability_result.rds')" else "",
+    "",
+    "# 保存组间比较结果", 
+    if (!is.null(group_compare_params)) "saveRDS(comparison_result, 'comparison_result.rds')" else "",
+    "",
+    "# 导出网络图",
+    "png('network_plot.png', width = 800, height = 600, res = 300)",
+    "plot(network_result, layout = 'spring', theme = 'colorblind')",
+    "dev.off()",
+    "",
+    "# 导出中心性图",
+    "png('centrality_plot.png', width = 800, height = 600, res = 300)", 
+    "centralityPlot(network_result)",
+    "dev.off()",
+    "",
+    "cat('分析完成！结果已保存到当前工作目录。\\n')",
+    "",
+    "# =============================================================================",
+    "# 代码结束",
+    "# ============================================================================="
+  )
+  
+  # 合并所有代码行
+  full_code <- paste(code_lines, collapse = "\n")
+  
+  return(full_code)
 }
