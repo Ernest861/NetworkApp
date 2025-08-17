@@ -8,6 +8,7 @@
 - **多层级分析支持**：汇总层（总分）、子量表层（维度得分）、条目层（原始题目）
 - **智能量表识别**：自动识别AUDIT、HRF、PHQ、GAD等8+种心理量表
 - **灵活变量选择**：专门的变量选择页面，支持每个量表独立选择分析层级
+- **智能数据质量评估**：实时显示完整观测数量，每个变量的缺失值统计和质量警告
 - **专业网络分析**：使用quickNet包进行EBIC网络估计
 - **独立稳定性分析**：使用bootnet包进行边稳定性和中心性稳定性检验
 - **完整可视化**：网络图、中心性图、稳定性图的高质量输出
@@ -82,7 +83,29 @@ values <- reactiveValues(
 ### **专门的变量选择页面**
 - **高级选择器**：`output$advanced_scale_selectors` 动态生成卡片式界面
 - **实时预览**：`output$final_variables_preview` 显示最终变量配置
+- **分组配色**：`output$variable_groups_ui` 变量分组配色管理
 - **确认流程**：`variables_confirmed` 状态管理，确保用户明确选择
+
+### **变量分组配色系统** ⭐
+- **默认分组**：每个量表自动分为一组，共用一个配色
+- **灵活分组**：用户可将多个量表合并为一组，或重新分配分组
+- **快速分组**：提供"全部合并"、"每个一组"、"按类型分组"等快捷操作
+- **智能匹配**：支持多种变量名匹配策略（精确、前缀、后缀、包含）
+- **配色应用**：分组配色自动应用到网络图中，便于识别量表聚类
+
+#### **分组功能使用示例**
+```
+用户场景：HRF18_General, PHQ9, AUDIT10 三个量表
+默认分组：组1=HRF18_General, 组2=PHQ9, 组3=AUDIT10
+自定义分组：
+  - 情绪认知组 = HRF18_General + PHQ9 （绿色显示）
+  - 物质使用组 = AUDIT10 （蓝色显示）
+```
+
+#### **快速分组功能**
+- **全部合并为一组**：所有量表使用同一颜色
+- **每个量表一组**：恢复默认分组
+- **按类型分组**：自动识别情绪、物质、动机等类型进行分组
 
 ### **层级选择逻辑**
 ```r
@@ -102,6 +125,59 @@ if(selected_level == "subscale") {
 if(selected_level == "items") {
   use_variables <- scale_info$items  # 2024-08-11: 移除了15条目限制
 }
+```
+
+## 🔬 NetCompare组间比较分析
+
+### **组间比较功能说明**
+应用支持使用quickNet包的NetCompare函数进行网络组间比较分析，提供完整的NCT (Network Comparison Test) 结果结构。
+
+#### **NetCompare调用参数**
+```r
+# 标准调用格式（参考你的示例）
+netcompare_result <- NetCompare(
+  group1_data, group2_data,
+  it = 5000,  # 置换检验次数
+  p.adjust.methods = "BH"  # 多重比较校正方法
+)
+```
+
+#### **完整的NCT结果结构**
+应用会自动解析并保存所有NCT字段：
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `glstrinv.real` | NCT | 全局强度不变性检验 - 实际值 |
+| `glstrinv.sep` | NCT | 全局强度不变性检验 - 分离值 |
+| `glstrinv.pval` | NCT | 全局强度不变性检验 - P值 |
+| `glstrinv.perm` | NCT | 全局强度不变性检验 - 置换分布 |
+| `nwinv.real` | NCT | 网络结构不变性检验 - 实际值 |
+| `nwinv.pval` | NCT | 网络结构不变性检验 - P值 |
+| `nwinv.perm` | NCT | 网络结构不变性检验 - 置换分布 |
+| `einv.real` | NCT | 边不变性检验 - 实际值 |
+| `einv.pvals` | NCT | 边不变性检验 - P值矩阵 |
+| `einv.perm` | NCT | 边不变性检验 - 置换分布 |
+| `diff_sig` | Matrix | 显著差异边的矩阵 |
+| `edge_weight_p` | Matrix | 边权重P值矩阵 |
+
+#### **结果导出功能**
+应用自动生成以下导出：
+- 差异网络可视化图
+- 显著性检验结果CSV
+- 组间统计摘要
+
+#### **使用示例代码模板**
+应用遵循你的代码风格，生成类似以下的分析代码：
+```r
+# 组间比较分析
+netcompare_result <- NetCompare(group1_data, group2_data, it=5000, p.adjust.methods = "BH")
+
+# 生成比较图
+get_compare_plot(netcompare_result, reference_network, prefix = "Fig3_comparison", width = 6, height = 4.5)
+
+# 导出结果
+write.csv(data.frame(netcompare_result$diff_sig), 'comparison_diff_network.csv', row.names = TRUE)
+write.csv(data.frame(netcompare_result$edge_weight_p), 'comparison_pvalue_matrix.csv', row.names = TRUE)
 ```
 
 ## 🔧 开发和维护指南
@@ -184,7 +260,10 @@ VIZ_CONFIG <- list(
 
 1. **数据量控制**：超过30个变量时给予提示，建议用户优化选择
 2. **稳定性分析**：Bootstrap次数根据样本量调整（小样本用500-1000次）
-3. **内存管理**：大数据集时考虑分批处理或采样
+3. **大数据集处理**：
+   - ⚠️ **重要**：永远不使用自动采样优化，始终使用完整数据集
+   - 大数据集（>2000行）仅给出性能提示，不进行数据采样
+   - 保持分析结果的完整性和可重复性
 
 ### **测试用例**
 
@@ -219,6 +298,13 @@ ID,Age,Gender,AUDIT10_1,AUDIT10_2,...,HRF18_1,HRF18_2,...,PHQ9_1,PHQ9_2,...
 - **其他量表** → 根据条目数和维度数自适应
 
 ## 🔄 版本历史
+
+### **v1.1 (2024-08-17) - 数据质量评估版**
+- ✅ 新增完整观测数量实时显示功能
+- ✅ 变量选择页面显示每个变量的缺失值统计
+- ✅ 智能数据质量评估和分层提示系统
+- ✅ 改进样本量不足的错误提示和建议
+- ✅ 增强变量预览界面的信息密度
 
 ### **v1.0 (2024-08-11) - 基础完成版**
 - ✅ 完整的6标签页应用架构

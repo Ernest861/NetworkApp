@@ -64,6 +64,8 @@ tryCatch({
     )
   )
   
+  # 变量分组配色已内联到网络分析函数中
+  
   NETWORK_PARAMS <<- list(
     bootstrap_min = 100,
     bootstrap_max = 10000,
@@ -362,6 +364,25 @@ ui <- dashboardPage(
               
               br(),
               
+              h5("🎨 变量分组配色："),
+              helpText("同组量表的变量将使用相同颜色在网络图中显示，便于识别量表聚类。"),
+              div(
+                class = "alert alert-info", 
+                style = "padding: 8px 12px; margin-bottom: 10px; font-size: 12px;",
+                tags$strong("💡 使用示例："),
+                tags$br(),
+                "• 将 HRF18_General 和 PHQ9 合并为 ", tags$strong("\"情绪认知组\""), " → 它们在网络图中显示为相同颜色",
+                tags$br(),
+                "• 将 AUDIT10 单独设为 ", tags$strong("\"物质使用组\""), " → 使用不同颜色显示",
+                tags$br(),
+                "• 这样可以快速识别不同心理构念在网络中的聚类模式"
+              ),
+              div(id = "variable_groups_config",
+                  uiOutput("variable_groups_ui")
+              ),
+              
+              br(),
+              
               div(class = "text-center",
                   actionButton("confirm_variables", "✓ 确认变量选择", 
                               class = "btn-success btn-lg", 
@@ -541,7 +562,8 @@ ui <- dashboardPage(
                           "这有助于识别两组在心理网络结构上的核心差异。")
                   )
                 ),
-                tabPanel("显著性检验", DT::dataTableOutput("group_compare_table")),
+                tabPanel("差异矩阵(diff_sig)", DT::dataTableOutput("group_compare_table")),
+                tabPanel("P值矩阵(edge_weight_p)", DT::dataTableOutput("p_value_matrix_table")),
                 tabPanel("组间统计", DT::dataTableOutput("group_stats_table"))
               )
             )
@@ -1974,6 +1996,28 @@ server <- function(input, output, session) {
       return()
     }
     
+    # 检查是否已有相同配置的网络分析结果（简单缓存）
+    analysis_hash <- tryCatch({
+      if(requireNamespace("digest", quietly = TRUE)) {
+        digest::digest(list(
+          data = values$analysis_data,
+          threshold = input$threshold
+        ), algo = "md5")
+      } else {
+        # 如果没有digest包，使用简单的字符串标识
+        paste0(ncol(values$analysis_data), "_", nrow(values$analysis_data), "_", input$threshold)
+      }
+    }, error = function(e) {
+      paste0(ncol(values$analysis_data), "_", nrow(values$analysis_data), "_", input$threshold)
+    })
+    
+    if (!is.null(values$last_analysis_hash) && 
+        values$last_analysis_hash == analysis_hash &&
+        !is.null(values$network_result)) {
+      showNotification("使用缓存的分析结果", type = "message")
+      return()
+    }
+    
     withProgress(message = '正在进行网络分析...', value = 0, {
       
       incProgress(0.1, detail = "检查分析数据...")
@@ -1991,22 +2035,101 @@ server <- function(input, output, session) {
       total_cases <- nrow(values$analysis_data)
       
       if(complete_cases < 5) {
-        showNotification("完整案例太少，无法进行网络分析", type = "error")
+        showNotification(
+          paste0("⚠️ 完整案例不足 (", complete_cases, "/", total_cases, ")：无法进行网络分析\n",
+                "建议：\n",
+                "• 减少变量数量（优先保留核心变量）\n", 
+                "• 检查数据质量，确认缺失值模式\n",
+                "• 考虑使用汇总层分析（总分变量通常缺失较少）"),
+          type = "error", duration = 8
+        )
         return()
       }
       
-      if(complete_cases / total_cases < 0.5) {
-        showNotification(paste("缺失数据较多，完整案例只有", complete_cases, "/", total_cases), type = "warning")
+      if(complete_cases < 20) {
+        showNotification(
+          paste0("⚠️ 完整案例较少 (", complete_cases, "/", total_cases, ")：网络分析结果可能不稳定\n",
+                "建议：\n", 
+                "• 尽量达到50+个完整案例以获得可靠结果\n",
+                "• 考虑减少变量数量或切换到汇总层分析\n",
+                "• 谨慎解释分析结果"),
+          type = "warning", duration = 6
+        )
+      } else if(complete_cases / total_cases < 0.5) {
+        showNotification(
+          paste0("📊 数据缺失提醒：完整案例占比 ", round(complete_cases/total_cases*100, 1), "% (", complete_cases, "/", total_cases, ")\n",
+                "当前可进行分析，但建议检查缺失数据模式"), 
+          type = "warning", duration = 4
+        )
+      }
+      
+      # 使用完整数据进行分析（不进行采样）
+      analysis_data_final <- values$analysis_data
+      
+      # 大数据集性能提示
+      if(total_cases > 2000) {
+        showNotification(paste("检测到大数据集(", total_cases, "行)，分析可能需要较长时间"), type = "warning")
       }
       
       incProgress(0.3, detail = "构建网络...")
       
       # 使用安全的网络分析函数
       tryCatch({
-        colors <- VIZ_CONFIG$colors$primary[1:min(n_vars, length(VIZ_CONFIG$colors$primary))]
+        # 生成基于分组的配色
+        colors <- tryCatch({
+          if(!is.null(values$variable_groups) && length(values$variable_groups) > 0) {
+            # 转换为变量索引格式的分组
+            variable_names <- colnames(analysis_data_final)
+            n_vars <- length(variable_names)
+            available_colors <- VIZ_CONFIG$colors$primary
+            
+            # 创建变量索引分组
+            groups_by_index <- list()
+            
+            # 为每个分组分配变量索引
+            for(i in seq_along(values$variable_groups)) {
+              group_name <- names(values$variable_groups)[i]
+              scales_in_group <- values$variable_groups[[i]]
+              
+              # 找到属于这个分组的变量索引
+              group_indices <- c()
+              for(scale_name in scales_in_group) {
+                # 多种匹配策略找到变量索引
+                matching_indices <- which(
+                  variable_names == scale_name |
+                  startsWith(variable_names, paste0(scale_name, "_")) |
+                  grepl(paste0("_", scale_name, "_"), variable_names) |
+                  endsWith(variable_names, paste0("_", scale_name))
+                )
+                group_indices <- c(group_indices, matching_indices)
+              }
+              
+              if(length(group_indices) > 0) {
+                groups_by_index[[group_name]] <- unique(group_indices)
+              }
+            }
+            
+            # 生成颜色向量
+            color_vector <- rep("#999999", n_vars)  # 默认灰色
+            for(i in seq_along(groups_by_index)) {
+              color_index <- ((i-1) %% length(available_colors)) + 1
+              group_color <- available_colors[color_index]
+              group_indices <- groups_by_index[[i]]
+              color_vector[group_indices] <- group_color
+            }
+            
+            color_vector
+          } else {
+            # 如果没有分组，使用默认配色
+            VIZ_CONFIG$colors$primary[1:min(ncol(analysis_data_final), length(VIZ_CONFIG$colors$primary))]
+          }
+        }, error = function(e) {
+          # 如果分组配色失败，使用默认配色
+          VIZ_CONFIG$colors$primary[1:min(ncol(analysis_data_final), length(VIZ_CONFIG$colors$primary))]
+        })
         
         values$network_result <- safe_network_analysis(
-          data = values$analysis_data,
+          data = analysis_data_final,
           threshold = input$threshold %||% 0.05,
           edge_labels = input$show_edge_labels %||% TRUE,
           colors = colors
@@ -2028,6 +2151,9 @@ server <- function(input, output, session) {
         })
         
         incProgress(1, detail = "网络分析完成!")
+        
+        # 保存分析hash用于缓存
+        values$last_analysis_hash <- analysis_hash
         
         showNotification(paste0("网络分析完成！使用了 ", n_vars, " 个变量，", complete_cases, " 个完整案例"), type = "message")
         
@@ -2055,12 +2181,31 @@ server <- function(input, output, session) {
   output$network_plot <- renderPlot({
     req(values$network_result)
     
+    # 检查network_result是否为有效对象
+    if (is.null(values$network_result)) {
+      plot.new()
+      text(0.5, 0.5, "网络结果为空，请重新运行分析", cex = 1.2, col = "red")
+      return(NULL)
+    }
+    
     # 确保plot正确显示
     tryCatch({
-      plot(values$network_result)
+      # 检查对象是否具有plot方法
+      if (inherits(values$network_result, c("quickNet", "qgraph", "igraph"))) {
+        plot(values$network_result)
+      } else {
+        # 如果不是标准网络对象，尝试其他方法
+        if (is.list(values$network_result) && !is.null(values$network_result$graph)) {
+          plot(values$network_result$graph)
+        } else {
+          plot.new()
+          text(0.5, 0.5, "无法绘制网络图：格式不支持", cex = 1.2, col = "orange")
+        }
+      }
     }, error = function(e) {
-      # 如果plot函数失败，尝试直接输出对象
-      values$network_result
+      # 绘图失败时显示错误信息
+      plot.new()
+      text(0.5, 0.5, paste("绘图失败:", e$message), cex = 1, col = "red", adj = c(0.5, 0.5))
     })
   })
   
@@ -2068,7 +2213,19 @@ server <- function(input, output, session) {
   output$centrality_plot <- renderPlot({
     req(values$centrality_result)
     
-    get_centrality_plot(values$centrality_result)
+    # 检查中心性结果是否有效
+    if (is.null(values$centrality_result)) {
+      plot.new()
+      text(0.5, 0.5, "中心性结果为空", cex = 1.2, col = "red")
+      return(NULL)
+    }
+    
+    tryCatch({
+      get_centrality_plot(values$centrality_result)
+    }, error = function(e) {
+      plot.new()
+      text(0.5, 0.5, paste("中心性图绘制失败:", e$message), cex = 1, col = "red", adj = c(0.5, 0.5))
+    })
   })
   
   # 独立的稳定性分析
@@ -2087,18 +2244,30 @@ server <- function(input, output, session) {
           incProgress(0.5, detail = "计算边稳定性...")
           
           if(input$run_edge_stability) {
-            edge_boot <- bootnet(values$analysis_data, nBoots = input$stability_bootstrap, 
-                               default = "EBICglasso", type = "nonparametric")
-            values$edge_stability <- edge_boot
+            tryCatch({
+              edge_boot <- bootnet(values$analysis_data, nBoots = input$stability_bootstrap, 
+                                 default = "EBICglasso", type = "nonparametric")
+              values$edge_stability <- edge_boot
+              showNotification("边稳定性分析完成", type = "message")
+            }, error = function(e) {
+              showNotification(paste("边稳定性分析失败:", e$message), type = "error")
+              values$edge_stability <- NULL
+            })
           }
           
           incProgress(0.8, detail = "计算中心性稳定性...")
           
           if(input$run_centrality_stability) {
-            cent_boot <- bootnet(values$analysis_data, nBoots = input$stability_bootstrap,
-                               default = "EBICglasso", type = "case", 
-                               statistics = c("strength", "closeness", "betweenness"))
-            values$centrality_stability <- cent_boot
+            tryCatch({
+              cent_boot <- bootnet(values$analysis_data, nBoots = input$stability_bootstrap,
+                                 default = "EBICglasso", type = "case", 
+                                 statistics = c("strength", "closeness", "betweenness"))
+              values$centrality_stability <- cent_boot
+              showNotification("中心性稳定性分析完成", type = "message")
+            }, error = function(e) {
+              showNotification(paste("中心性稳定性分析失败:", e$message), type = "error")
+              values$centrality_stability <- NULL
+            })
           }
           
           values$stability_result <- list(
@@ -2360,11 +2529,35 @@ server <- function(input, output, session) {
             p.adjust.methods = input$p_adjust_method
           )
           
-          incProgress(0.8, detail = "生成比较图...")
+          incProgress(0.8, detail = "生成比较图和结果...")
+          
+          # 解析NetCompare结果结构，包含完整的NCT字段
+          nct_result <- list(
+            # 全局强度不变性检验
+            glstrinv.real = compare_result$glstrinv.real,
+            glstrinv.sep = compare_result$glstrinv.sep, 
+            glstrinv.pval = compare_result$glstrinv.pval,
+            glstrinv.perm = compare_result$glstrinv.perm,
+            
+            # 网络结构不变性检验
+            nwinv.real = compare_result$nwinv.real,
+            nwinv.pval = compare_result$nwinv.pval,
+            nwinv.perm = compare_result$nwinv.perm,
+            
+            # 边不变性检验
+            einv.real = compare_result$einv.real,
+            einv.pvals = compare_result$einv.pvals,
+            einv.perm = compare_result$einv.perm,
+            
+            # 差异显著性结果
+            diff_sig = compare_result$diff_sig,
+            edge_weight_p = compare_result$edge_weight_p
+          )
           
           # 保存结果
           values$group_compare_result <- list(
             compare_result = compare_result,
+            nct_result = nct_result,  # 添加结构化的NCT结果
             group1_data = group1_data,
             group2_data = group2_data,
             group1_name = group1_name,
@@ -2417,72 +2610,58 @@ server <- function(input, output, session) {
     tryCatch({
       result <- values$group_compare_result$compare_result
       
-      # 调试：检查result的结构
-      cat("NetCompare结果结构:\n")
-      cat("字段名:", names(result), "\n")
-      if(!is.null(result)) {
-        cat("结果类型:", class(result), "\n")
-      }
-      
-      # 尝试多种可能的字段名来提取显著性检验结果
+      # 创建显著性检验结果表格，显示diff_sig和edge_weight_p矩阵
       sig_results <- NULL
       
-      # 方法1：检查标准字段
-      if(!is.null(result$p.values) && !is.null(result$difference)) {
-        sig_results <- data.frame(
-          边 = names(result$p.values),
-          原始p值 = round(result$p.values, 4),
-          校正p值 = round(result$p.adjust %||% result$p.values, 4),
-          显著性 = ifelse((result$p.adjust %||% result$p.values) < 0.05, "显著", "不显著"),
-          差异值 = round(result$difference, 4),
-          stringsAsFactors = FALSE
-        )
-      }
-      # 方法2：检查pval字段
-      else if(!is.null(result$pval) && !is.null(result$difference)) {
-        sig_results <- data.frame(
-          边 = names(result$pval),
-          原始p值 = round(result$pval, 4),
-          校正p值 = round(result$p.adjust %||% result$pval, 4),
-          显著性 = ifelse((result$p.adjust %||% result$pval) < 0.05, "显著", "不显著"),
-          差异值 = round(result$difference, 4),
-          stringsAsFactors = FALSE
-        )
-      }
-      # 方法3：检查p字段
-      else if(!is.null(result$p) && !is.null(result$difference)) {
-        sig_results <- data.frame(
-          边 = names(result$p),
-          原始p值 = round(result$p, 4),
-          校正p值 = round(result$p.adjust %||% result$p, 4),
-          显著性 = ifelse((result$p.adjust %||% result$p) < 0.05, "显著", "不显著"),
-          差异值 = round(result$difference, 4),
-          stringsAsFactors = FALSE
-        )
-      }
-      # 方法4：如果result本身是数据框
-      else if(is.data.frame(result)) {
-        # 尝试从数据框中提取
-        p_col <- NULL
-        diff_col <- NULL
+      # 优先使用diff_sig和edge_weight_p矩阵
+      if(!is.null(result$diff_sig) && !is.null(result$edge_weight_p)) {
         
-        if("p.value" %in% names(result)) p_col <- "p.value"
-        else if("pval" %in% names(result)) p_col <- "pval"
-        else if("p" %in% names(result)) p_col <- "p"
+        diff_matrix <- as.matrix(result$diff_sig)
+        p_matrix <- as.matrix(result$edge_weight_p)
         
-        if("difference" %in% names(result)) diff_col <- "difference"
-        else if("diff" %in% names(result)) diff_col <- "diff"
+        # 获取变量名
+        var_names <- rownames(diff_matrix)
+        if(is.null(var_names)) var_names <- colnames(diff_matrix)
+        if(is.null(var_names)) var_names <- paste0("V", 1:nrow(diff_matrix))
         
-        if(!is.null(p_col) && !is.null(diff_col)) {
-          sig_results <- data.frame(
-            边 = rownames(result) %||% paste0("边", 1:nrow(result)),
-            原始p值 = round(result[[p_col]], 4),
-            校正p值 = round(result[["p.adjust"]] %||% result[[p_col]], 4),
-            显著性 = ifelse((result[["p.adjust"]] %||% result[[p_col]]) < 0.05, "显著", "不显著"),
-            差异值 = round(result[[diff_col]], 4),
-            stringsAsFactors = FALSE
-          )
+        # 创建边的标签和对应的差异值、p值
+        edges <- c()
+        differences <- c()
+        p_values <- c()
+        
+        # 遍历上三角矩阵（避免重复）
+        for(i in 1:(nrow(diff_matrix)-1)) {
+          for(j in (i+1):ncol(diff_matrix)) {
+            edge_name <- paste0(var_names[i], " -- ", var_names[j])
+            edges <- c(edges, edge_name)
+            differences <- c(differences, diff_matrix[i, j])
+            p_values <- c(p_values, p_matrix[i, j])
+          }
         }
+        
+        # 创建结果数据框
+        sig_results <- data.frame(
+          边连接 = edges,
+          差异值 = round(differences, 4),
+          P值 = round(p_values, 4),
+          显著性 = ifelse(p_values < 0.05, "显著", "不显著"),
+          效应大小 = ifelse(abs(differences) > 0.1, "大", 
+                      ifelse(abs(differences) > 0.05, "中", "小")),
+          stringsAsFactors = FALSE
+        )
+        
+        # 按p值排序，显著的在前
+        sig_results <- sig_results[order(sig_results$P值), ]
+        
+      } else {
+        # 如果没有diff_sig和edge_weight_p，显示调试信息
+        debug_info <- data.frame(
+          字段名 = names(result) %||% "无字段",
+          类型 = if(!is.null(result)) sapply(result, class) else "NULL",
+          说明 = "NetCompare结果结构信息",
+          stringsAsFactors = FALSE
+        )
+        sig_results <- debug_info
       }
       
       if(!is.null(sig_results) && nrow(sig_results) > 0) {
@@ -2543,18 +2722,39 @@ server <- function(input, output, session) {
         stringsAsFactors = FALSE
       )
       
-      # 添加显著性统计
-      if(!is.null(result$compare_result$p.adjust)) {
-        sig_count <- sum(result$compare_result$p.adjust < 0.05, na.rm = TRUE)
-        total_count <- length(result$compare_result$p.adjust)
+      # 添加diff_sig和edge_weight_p矩阵的统计信息
+      if(!is.null(result$compare_result$diff_sig) && !is.null(result$compare_result$edge_weight_p)) {
         
-        # 添加结果统计到表格
+        diff_matrix <- as.matrix(result$compare_result$diff_sig)
+        p_matrix <- as.matrix(result$compare_result$edge_weight_p)
+        
+        # 计算上三角矩阵统计（避免重复计算）
+        upper_tri_indices <- upper.tri(diff_matrix)
+        diff_values <- diff_matrix[upper_tri_indices]
+        p_values <- p_matrix[upper_tri_indices]
+        
+        # 统计显著边
+        sig_count <- sum(p_values < 0.05, na.rm = TRUE)
+        total_count <- length(p_values)
+        
+        # 统计效应大小
+        large_effect <- sum(abs(diff_values) > 0.1, na.rm = TRUE)
+        medium_effect <- sum(abs(diff_values) > 0.05 & abs(diff_values) <= 0.1, na.rm = TRUE)
+        
+        # 添加矩阵统计到表格
         result_stats <- data.frame(
-          统计项目 = c("检验的边数", "显著差异边数", "显著差异比例"),
+          统计项目 = c("矩阵维度", "检验的边数", "显著差异边数", "显著差异比例", 
+                      "大效应边数(|diff|>0.1)", "中效应边数(0.05<|diff|≤0.1)", 
+                      "平均差异值", "最大绝对差异"),
           统计值 = c(
+            paste0(nrow(diff_matrix), "×", ncol(diff_matrix)),
             as.character(total_count),
             as.character(sig_count),
-            paste0(round(sig_count/total_count*100, 1), "%")
+            paste0(round(sig_count/total_count*100, 1), "%"),
+            as.character(large_effect),
+            as.character(medium_effect),
+            round(mean(abs(diff_values), na.rm = TRUE), 4),
+            round(max(abs(diff_values), na.rm = TRUE), 4)
           ),
           stringsAsFactors = FALSE
         )
@@ -2573,6 +2773,63 @@ server <- function(input, output, session) {
       
     }, error = function(e) {
       data.frame(错误 = paste("组间统计表格生成失败:", e$message))
+    })
+  })
+  
+  # P值矩阵表格
+  output$p_value_matrix_table <- DT::renderDataTable({
+    req(values$group_compare_result)
+    
+    tryCatch({
+      result <- values$group_compare_result$compare_result
+      
+      if(!is.null(result$edge_weight_p)) {
+        
+        # 获取P值矩阵
+        p_matrix <- as.matrix(result$edge_weight_p)
+        
+        # 获取变量名
+        var_names <- rownames(p_matrix)
+        if(is.null(var_names)) var_names <- colnames(p_matrix)
+        if(is.null(var_names)) var_names <- paste0("变量", 1:nrow(p_matrix))
+        
+        # 创建带变量名的P值矩阵表格
+        p_matrix_df <- as.data.frame(p_matrix)
+        
+        # 设置行名和列名
+        rownames(p_matrix_df) <- var_names
+        colnames(p_matrix_df) <- var_names
+        
+        # 添加行名作为第一列
+        p_matrix_df <- data.frame(变量 = var_names, p_matrix_df, stringsAsFactors = FALSE)
+        
+        # 对数值列进行四舍五入
+        numeric_cols <- sapply(p_matrix_df, is.numeric)
+        p_matrix_df[numeric_cols] <- lapply(p_matrix_df[numeric_cols], function(x) round(x, 4))
+        
+        DT::datatable(p_matrix_df, 
+                     options = list(pageLength = 15, scrollX = TRUE, scrollY = "400px"),
+                     rownames = FALSE) %>%
+          DT::formatStyle(columns = 2:ncol(p_matrix_df), 
+                         backgroundColor = DT::styleInterval(c(0.01, 0.05), 
+                                                           c("#d4edda", "#fff3cd", "#f8d7da")))
+        
+      } else {
+        # 如果没有edge_weight_p矩阵，显示提示
+        info_df <- data.frame(
+          说明 = "暂无P值矩阵数据",
+          建议 = "请确保NetCompare函数返回了edge_weight_p字段",
+          stringsAsFactors = FALSE
+        )
+        DT::datatable(info_df, options = list(dom = 't'), rownames = FALSE)
+      }
+      
+    }, error = function(e) {
+      error_df <- data.frame(
+        错误信息 = paste("P值矩阵显示失败:", e$message),
+        stringsAsFactors = FALSE
+      )
+      DT::datatable(error_df, options = list(dom = 't'), rownames = FALSE)
     })
   })
   
@@ -2801,6 +3058,29 @@ server <- function(input, output, session) {
   
   # 确认变量选择
   
+  # 辅助函数：获取变量统计信息
+  get_variable_stats <- function(var_name, data) {
+    if(is.null(data) || is.null(var_name) || !var_name %in% names(data)) {
+      return(" [不存在]")
+    }
+    
+    var_data <- data[[var_name]]
+    total_obs <- length(var_data)
+    missing_obs <- sum(is.na(var_data))
+    valid_obs <- total_obs - missing_obs
+    missing_pct <- round(missing_obs / total_obs * 100, 1)
+    
+    if(missing_obs == 0) {
+      return(paste0(" [", valid_obs, " 完整]"))
+    } else if(missing_pct < 5) {
+      return(paste0(" [", valid_obs, "/", total_obs, "]"))
+    } else if(missing_pct < 20) {
+      return(paste0(" [", valid_obs, "/", total_obs, " ⚠️", missing_pct, "%缺失]"))
+    } else {
+      return(paste0(" [", valid_obs, "/", total_obs, " ❌", missing_pct, "%缺失]"))
+    }
+  }
+  
   # 生成最终变量预览
   output$final_variables_preview <- renderText({
     # 检查是否有已计算的量表结果
@@ -2827,7 +3107,11 @@ server <- function(input, output, session) {
         if(selected_level == "summary") {
           # 汇总层：显示新增的变量
           if(is_manual) {
-            preview_lines <- c(preview_lines, paste0(scale_icon, " ", scale_name, ": ", paste(scale_info$new_variables, collapse = ", "), " (手动计算)"))
+            # 手动计算变量的统计信息
+            for(var_name in scale_info$new_variables) {
+              var_stats <- get_variable_stats(var_name, values$processed_data)
+              preview_lines <- c(preview_lines, paste0(scale_icon, " ", scale_name, ": ", var_name, var_stats, " (手动计算)"))
+            }
             total_vars <- total_vars + length(scale_info$new_variables)
           } else {
             # 对于预配置量表，显示总分变量（支持新命名规则）
@@ -2839,10 +3123,12 @@ server <- function(input, output, session) {
                          if(grepl("_weighted$", total_vars_names[1])) "加权" else
                          if(grepl("_cfa$", total_vars_names[1])) "CFA" else
                          if(grepl("_pca$", total_vars_names[1])) "PCA" else "总分"
-              preview_lines <- c(preview_lines, paste0(scale_icon, " ", scale_name, ": ", total_vars_names[1], " (", var_type, ")"))
+              var_stats <- get_variable_stats(total_vars_names[1], values$processed_data)
+              preview_lines <- c(preview_lines, paste0(scale_icon, " ", scale_name, ": ", total_vars_names[1], var_stats, " (", var_type, ")"))
               total_vars <- total_vars + 1
             } else {
-              preview_lines <- c(preview_lines, paste0(scale_icon, " ", scale_name, ": ", scale_info$new_variables[1], " (汇总)"))
+              var_stats <- get_variable_stats(scale_info$new_variables[1], values$processed_data)
+              preview_lines <- c(preview_lines, paste0(scale_icon, " ", scale_name, ": ", scale_info$new_variables[1], var_stats, " (汇总)"))
               total_vars <- total_vars + 1
             }
           }
@@ -2853,7 +3139,8 @@ server <- function(input, output, session) {
           if(length(subscale_vars) > 0) {
             preview_lines <- c(preview_lines, paste0(scale_icon, " ", scale_name, " (", length(subscale_vars), " 个维度):"))
             for(var_name in subscale_vars) {
-              preview_lines <- c(preview_lines, paste0("   • ", var_name))
+              var_stats <- get_variable_stats(var_name, values$processed_data)
+              preview_lines <- c(preview_lines, paste0("   • ", var_name, var_stats))
             }
             total_vars <- total_vars + length(subscale_vars)
           }
@@ -2865,9 +3152,34 @@ server <- function(input, output, session) {
             available_scale_info <- values$calculated_scales$available_scales[[scale_name]]
             if(!is.null(available_scale_info$existing_items)) {
               items <- available_scale_info$existing_items
-              preview_lines <- c(preview_lines, paste0(scale_icon, " ", scale_name, ": ", length(items), " 个条目"))
-              preview_lines <- c(preview_lines, paste0("   ", paste(head(items, 3), collapse = ", "), 
-                                                      if(length(items) > 3) "..." else ""))
+              
+              # 计算完整案例数（所有条目都不缺失的案例）
+              if(!is.null(values$processed_data)) {
+                available_items <- intersect(items, names(values$processed_data))
+                if(length(available_items) > 0) {
+                  items_data <- values$processed_data[, available_items, drop = FALSE]
+                  complete_items_cases <- sum(complete.cases(items_data))
+                  total_cases <- nrow(items_data)
+                  items_stats <- paste0(" [完整: ", complete_items_cases, "/", total_cases, "]")
+                } else {
+                  items_stats <- " [数据缺失]"
+                }
+              } else {
+                items_stats <- ""
+              }
+              
+              preview_lines <- c(preview_lines, paste0(scale_icon, " ", scale_name, ": ", length(items), " 个条目", items_stats))
+              
+              # 显示前几个条目及其统计信息
+              display_items <- head(items, 3)
+              for(item_name in display_items) {
+                item_stats <- get_variable_stats(item_name, values$processed_data)
+                preview_lines <- c(preview_lines, paste0("   • ", item_name, item_stats))
+              }
+              if(length(items) > 3) {
+                preview_lines <- c(preview_lines, paste0("   ... 还有 ", length(items) - 3, " 个条目"))
+              }
+              
               total_vars <- total_vars + length(items)
             }
           }
@@ -2876,10 +3188,184 @@ server <- function(input, output, session) {
         preview_lines <- c(preview_lines, "")
       }
       
-      header <- paste0("🎯 网络分析将包含 ", total_vars, " 个变量\n",
-                      "==========================================\n\n")
+      # 计算当前变量组合的完整案例数
+      temp_analysis_data <- NULL
+      complete_cases_info <- ""
       
-      return(paste0(header, paste(preview_lines, collapse = "\n")))
+      if(!is.null(values$processed_data)) {
+        # 重新计算final_variables用于完整案例统计
+        temp_final_variables <- character(0)
+        for(scale_name in names(scales_info)) {
+          scale_info <- scales_info[[scale_name]]
+          level_input_id <- paste0("advanced_level_", scale_name)
+          selected_level <- input[[level_input_id]]
+          if(is.null(selected_level)) selected_level <- "summary"
+          is_manual <- !is.null(scale_info$is_manual) && scale_info$is_manual
+          
+          if(selected_level == "summary") {
+            if(is_manual) {
+              temp_final_variables <- c(temp_final_variables, scale_info$new_variables)
+            } else {
+              total_vars_names <- scale_info$new_variables[sapply(scale_info$new_variables, function(x) any(sapply(total_patterns, function(p) grepl(p, x))))]
+              if(length(total_vars_names) > 0) {
+                temp_final_variables <- c(temp_final_variables, total_vars_names[1])
+              } else {
+                temp_final_variables <- c(temp_final_variables, scale_info$new_variables[1])
+              }
+            }
+          } else if(selected_level == "subscale") {
+            subscale_vars <- scale_info$new_variables[!sapply(scale_info$new_variables, function(x) any(sapply(total_patterns, function(p) grepl(p, x))))]
+            temp_final_variables <- c(temp_final_variables, subscale_vars)
+          } else if(selected_level == "items") {
+            if(!is.null(values$calculated_scales$available_scales) && 
+               scale_name %in% names(values$calculated_scales$available_scales)) {
+              available_scale_info <- values$calculated_scales$available_scales[[scale_name]]
+              if(!is.null(available_scale_info$existing_items)) {
+                temp_final_variables <- c(temp_final_variables, available_scale_info$existing_items)
+              }
+            }
+          }
+        }
+        
+        # 检查这些变量的完整案例数
+        if(length(temp_final_variables) > 0) {
+          available_vars <- intersect(temp_final_variables, names(values$processed_data))
+          if(length(available_vars) > 0) {
+            temp_analysis_data <- values$processed_data[, available_vars, drop = FALSE]
+            complete_cases <- sum(complete.cases(temp_analysis_data))
+            total_cases <- nrow(temp_analysis_data)
+            missing_vars <- setdiff(temp_final_variables, available_vars)
+            
+            # 生成完整案例信息
+            if(complete_cases >= 50) {
+              status_icon <- "✅"
+              status_color <- ""
+            } else if(complete_cases >= 20) {
+              status_icon <- "⚠️"
+              status_color <- ""
+            } else {
+              status_icon <- "❌"
+              status_color <- ""
+            }
+            
+            complete_cases_info <- paste0(
+              "📊 数据质量评估:\n",
+              "   ", status_icon, " 完整观测: ", complete_cases, " / ", total_cases, " (", round(complete_cases/total_cases*100, 1), "%)\n"
+            )
+            
+            if(length(missing_vars) > 0) {
+              complete_cases_info <- paste0(complete_cases_info,
+                "   🔍 缺失变量: ", length(missing_vars), " 个 (", paste(head(missing_vars, 3), collapse = ", "), 
+                if(length(missing_vars) > 3) "..." else "", ")\n"
+              )
+            }
+            
+            if(complete_cases < 20) {
+              complete_cases_info <- paste0(complete_cases_info,
+                "   💡 建议: 完整案例过少，考虑减少变量或检查数据质量\n"
+              )
+            } else if(complete_cases < 50) {
+              complete_cases_info <- paste0(complete_cases_info,
+                "   💡 建议: 完整案例较少，网络分析结果可能不够稳定\n"
+              )
+            }
+            
+            complete_cases_info <- paste0(complete_cases_info, "\n")
+          }
+        }
+      }
+      
+      header <- paste0("🎯 网络分析将包含 ", total_vars, " 个变量\n",
+                      "==========================================\n\n",
+                      complete_cases_info)
+      
+      # 添加分组配色预览
+      color_preview <- ""
+      if(!is.null(values$variable_groups) && length(values$variable_groups) > 0) {
+        color_preview <- "\n🎨 变量分组配色:\n"
+        available_colors <- VIZ_CONFIG$colors$primary
+        color_names <- c("绿色", "蓝色", "粉色", "黄色", "紫色", "浅粉", "浅蓝", "浅绿", "橙色", "淡紫")
+        
+        # 获取最终变量列表以生成索引
+        if(total_vars > 0) {
+          # 重新计算final_variables用于索引显示
+          temp_final_variables <- character(0)
+          for(scale_name in names(scales_info)) {
+            scale_info <- scales_info[[scale_name]]
+            level_input_id <- paste0("advanced_level_", scale_name)
+            selected_level <- input[[level_input_id]]
+            if(is.null(selected_level)) selected_level <- "summary"
+            is_manual <- !is.null(scale_info$is_manual) && scale_info$is_manual
+            
+            if(selected_level == "summary") {
+              if(is_manual) {
+                temp_final_variables <- c(temp_final_variables, scale_info$new_variables)
+              } else {
+                total_vars_names <- scale_info$new_variables[sapply(scale_info$new_variables, function(x) any(sapply(total_patterns, function(p) grepl(p, x))))]
+                if(length(total_vars_names) > 0) {
+                  temp_final_variables <- c(temp_final_variables, total_vars_names[1])
+                } else {
+                  temp_final_variables <- c(temp_final_variables, scale_info$new_variables[1])
+                }
+              }
+            } else if(selected_level == "subscale") {
+              subscale_vars <- scale_info$new_variables[!sapply(scale_info$new_variables, function(x) any(sapply(total_patterns, function(p) grepl(p, x))))]
+              temp_final_variables <- c(temp_final_variables, subscale_vars)
+            } else if(selected_level == "items") {
+              if(!is.null(values$calculated_scales$available_scales) && 
+                 scale_name %in% names(values$calculated_scales$available_scales)) {
+                available_scale_info <- values$calculated_scales$available_scales[[scale_name]]
+                if(!is.null(available_scale_info$existing_items)) {
+                  temp_final_variables <- c(temp_final_variables, available_scale_info$existing_items)
+                }
+              }
+            }
+          }
+          
+          # 显示分组及其变量索引
+          for(i in seq_along(values$variable_groups)) {
+            group_name <- names(values$variable_groups)[i]
+            scales_in_group <- values$variable_groups[[i]]
+            color_index <- ((i-1) %% length(available_colors)) + 1
+            color_name <- if(color_index <= length(color_names)) color_names[color_index] else paste0("颜色", color_index)
+            
+            # 找到这个分组对应的变量索引
+            group_indices <- c()
+            for(scale_name in scales_in_group) {
+              matching_indices <- which(
+                temp_final_variables == scale_name |
+                startsWith(temp_final_variables, paste0(scale_name, "_")) |
+                grepl(paste0("_", scale_name, "_"), temp_final_variables) |
+                endsWith(temp_final_variables, paste0("_", scale_name))
+              )
+              group_indices <- c(group_indices, matching_indices)
+            }
+            group_indices <- unique(sort(group_indices))
+            
+            if(length(group_indices) > 0) {
+              indices_text <- if(length(group_indices) == 1) {
+                as.character(group_indices)
+              } else if(all(diff(group_indices) == 1)) {
+                paste0(min(group_indices), ":", max(group_indices))
+              } else {
+                paste0("c(", paste(group_indices, collapse = ","), ")")
+              }
+              
+              color_preview <- paste0(color_preview, 
+                                    "  ", group_name, " (", color_name, ") = ", indices_text, " # ", 
+                                    paste(scales_in_group, collapse = ", "), "\n")
+            } else {
+              color_preview <- paste0(color_preview, 
+                                    "  ", group_name, " (", color_name, "): ", 
+                                    paste(scales_in_group, collapse = ", "), " [未匹配到变量]\n")
+            }
+          }
+        }
+        
+        color_preview <- paste0(color_preview, "\n格式类似: groups=list(组1=1, 组2=2:4, 组3=c(5:12))\n")
+      }
+      
+      return(paste0(header, paste(preview_lines, collapse = "\n"), color_preview))
       
     } else if(!is.null(values$scales) && length(values$scales) > 0) {
       return(paste0("✅ 已检测到 ", length(values$scales), " 个量表\n\n⚠️ 请先在【变量构造】页面进行计算，然后返回此处选择变量"))
@@ -2983,6 +3469,348 @@ server <- function(input, output, session) {
     values$variables_confirmed <- FALSE
     values$analysis_data <- NULL
     showNotification("已重置变量选择，请重新配置", type = "message")
+  })
+  
+  # 变量分组配色UI
+  output$variable_groups_ui <- renderUI({
+    if(!is.null(values$calculated_scales) && !is.null(values$calculated_scales$summary) && 
+       length(values$calculated_scales$summary) > 0) {
+      
+      scales_info <- values$calculated_scales$summary
+      scale_names <- names(scales_info)
+      
+      # 默认分组：每个量表为一组
+      if(is.null(values$variable_groups)) {
+        values$variable_groups <- list()
+        for(i in seq_along(scale_names)) {
+          values$variable_groups[[paste0("组", i)]] <- scale_names[i]
+        }
+      }
+      
+      # 获取可用颜色
+      available_colors <- VIZ_CONFIG$colors$primary
+      if(is.null(available_colors)) {
+        available_colors <- c("#E31A1C", "#1F78B4", "#33A02C", "#FF7F00", "#6A3D9A", 
+                             "#FB9A99", "#A6CEE3", "#B2DF8A", "#FDBF6F", "#CAB2D6")
+      }
+      
+      group_ui <- list()
+      
+      # 当前分组显示（可编辑）
+      group_ui[[1]] <- div(
+        style = "background-color: #f8f9fa; padding: 12px; border-radius: 5px; margin-bottom: 12px;",
+        div(
+          style = "display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;",
+          h6("当前分组配置：", style = "margin: 0; font-weight: bold;"),
+          div(
+            # 编辑模式状态显示
+            if(!is.null(values$edit_mode) && values$edit_mode) {
+              list(
+                span("🔧 编辑模式", style = "font-size: 11px; color: #28a745; font-weight: bold; margin-right: 8px;"),
+                actionButton("edit_groups_mode", "完成编辑", 
+                            class = "btn-sm btn-success", 
+                            style = "height: 28px; font-size: 11px;")
+              )
+            } else {
+              actionButton("edit_groups_mode", "编辑分组", 
+                          class = "btn-sm btn-outline-primary", 
+                          style = "height: 28px; font-size: 11px;")
+            },
+            actionButton("reset_groups", "重置", 
+                        class = "btn-sm btn-outline-secondary", 
+                        style = "height: 28px; font-size: 11px; margin-left: 5px;")
+          )
+        ),
+        # 编辑模式提示
+        if(!is.null(values$edit_mode) && values$edit_mode) {
+          div(
+            class = "alert alert-warning",
+            style = "padding: 8px 12px; margin-bottom: 10px; font-size: 12px;",
+            tags$strong("📝 编辑模式："), "点击分组右上角的 × 按钮可删除分组，被删除分组中的量表会重新分配为单独的组。"
+          )
+        },
+        
+        div(id = "current_groups_display",
+            if(!is.null(values$edit_mode) && values$edit_mode) {
+              # 编辑模式：显示可删除的分组
+              lapply(seq_along(values$variable_groups), function(i) {
+                group_name <- names(values$variable_groups)[i]
+                scales_in_group <- values$variable_groups[[i]]
+                color <- available_colors[((i-1) %% length(available_colors)) + 1]
+                
+                div(
+                  style = paste0("background-color: ", color, "; color: white; padding: 6px 10px; margin: 3px 2px; border-radius: 4px; display: inline-block; font-size: 12px; position: relative; cursor: pointer; border: 2px dashed rgba(255,255,255,0.5);"),
+                  span(paste0(group_name, ": ", paste(scales_in_group, collapse = ", "))),
+                  # 删除按钮
+                  actionButton(paste0("delete_group_", group_name), "×", 
+                              class = "btn-sm", 
+                              style = "position: absolute; top: -8px; right: -8px; width: 20px; height: 20px; padding: 0; font-size: 12px; background: #dc3545; color: white; border: 2px solid white; border-radius: 50%; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.2);",
+                              onclick = paste0("Shiny.setInputValue('delete_group_trigger', '", group_name, "', {priority: 'event'});"))
+                )
+              })
+            } else {
+              # 普通模式：只显示分组
+              lapply(seq_along(values$variable_groups), function(i) {
+                group_name <- names(values$variable_groups)[i]
+                scales_in_group <- values$variable_groups[[i]]
+                color <- available_colors[((i-1) %% length(available_colors)) + 1]
+                
+                div(
+                  style = paste0("background-color: ", color, "; color: white; padding: 6px 10px; margin: 3px 2px; border-radius: 4px; display: inline-block; font-size: 12px;"),
+                  paste0(group_name, ": ", paste(scales_in_group, collapse = ", "))
+                )
+              })
+            }
+        )
+      )
+      
+      # 智能分组工具
+      group_ui[[2]] <- div(
+        style = "margin-top: 12px; padding: 12px; border: 1px solid #dee2e6; border-radius: 5px;",
+        h6("🎨 智能分组工具：", style = "margin-bottom: 10px; color: #495057;"),
+        
+        # 快速分组按钮
+        div(
+          style = "margin-bottom: 10px;",
+          h6("快速分组：", style = "font-size: 13px; margin-bottom: 5px;"),
+          div(
+            style = "display: flex; gap: 5px; flex-wrap: wrap;",
+            actionButton("quick_all_one", "全部合并为一组", 
+                        class = "btn-sm btn-outline-info", 
+                        style = "font-size: 11px;"),
+            actionButton("quick_each_one", "每个量表一组", 
+                        class = "btn-sm btn-outline-info", 
+                        style = "font-size: 11px;"),
+            actionButton("quick_by_type", "按类型分组", 
+                        class = "btn-sm btn-outline-info", 
+                        style = "font-size: 11px;")
+          )
+        ),
+        
+        # 自定义分组
+        div(
+          h6("自定义分组：", style = "font-size: 13px; margin-bottom: 8px;"),
+          div(
+            style = "display: flex; gap: 8px; align-items: end; margin-bottom: 8px;",
+            div(
+              style = "flex: 1;",
+              tags$label("选择量表：", style = "font-size: 12px; margin-bottom: 2px; display: block;"),
+              selectInput("group_scales", NULL, 
+                         choices = scale_names,
+                         selected = NULL,
+                         multiple = TRUE,
+                         width = "100%")
+            ),
+            div(
+              style = "width: 100px;",
+              tags$label("组名：", style = "font-size: 12px; margin-bottom: 2px; display: block;"),
+              textInput("group_name", NULL, 
+                       placeholder = "如：认知组", 
+                       width = "100%")
+            ),
+            actionButton("add_custom_group", "创建分组", 
+                        class = "btn-sm btn-success",
+                        style = "height: 34px; white-space: nowrap;")
+          ),
+          div(
+            style = "font-size: 11px; color: #6c757d;",
+            "💡 提示：选择多个量表可以将它们合并为一组，便于在网络图中识别"
+          )
+        )
+      )
+      
+      return(group_ui)
+    }
+  })
+  
+  # 添加自定义分组（新版本）
+  observeEvent(input$add_custom_group, {
+    req(input$group_scales, input$group_name)
+    
+    if(nchar(trimws(input$group_name)) == 0) {
+      showNotification("请输入组名", type = "warning")
+      return()
+    }
+    
+    group_name <- trimws(input$group_name)
+    selected_scales <- input$group_scales
+    
+    # 检查是否有重复
+    if(group_name %in% names(values$variable_groups)) {
+      showNotification("组名已存在，请使用不同的组名", type = "warning")
+      return()
+    }
+    
+    # 从现有分组中移除这些量表
+    for(existing_group in names(values$variable_groups)) {
+      values$variable_groups[[existing_group]] <- values$variable_groups[[existing_group]][
+        !values$variable_groups[[existing_group]] %in% selected_scales
+      ]
+    }
+    
+    # 移除空的分组
+    values$variable_groups <- values$variable_groups[sapply(values$variable_groups, length) > 0]
+    
+    # 添加新分组
+    values$variable_groups[[group_name]] <- selected_scales
+    
+    # 清空输入框
+    updateSelectInput(session, "group_scales", selected = NULL)
+    updateTextInput(session, "group_name", value = "")
+    
+    showNotification(paste0("已创建分组: ", group_name), type = "message")
+  })
+  
+  # 保留旧版本的兼容性
+  observeEvent(input$add_group, {
+    req(input$group_scales, input$group_name)
+    
+    if(nchar(trimws(input$group_name)) == 0) {
+      showNotification("请输入组名", type = "warning")
+      return()
+    }
+    
+    group_name <- trimws(input$group_name)
+    selected_scales <- input$group_scales
+    
+    # 检查是否有重复
+    if(group_name %in% names(values$variable_groups)) {
+      showNotification("组名已存在，请使用不同的组名", type = "warning")
+      return()
+    }
+    
+    # 从现有分组中移除这些量表
+    for(existing_group in names(values$variable_groups)) {
+      values$variable_groups[[existing_group]] <- values$variable_groups[[existing_group]][
+        !values$variable_groups[[existing_group]] %in% selected_scales
+      ]
+    }
+    
+    # 移除空的分组
+    values$variable_groups <- values$variable_groups[sapply(values$variable_groups, length) > 0]
+    
+    # 添加新分组
+    values$variable_groups[[group_name]] <- selected_scales
+    
+    # 清空输入框
+    updateSelectInput(session, "group_scales", selected = NULL)
+    updateTextInput(session, "group_name", value = "")
+    
+    showNotification(paste0("已创建分组: ", group_name), type = "message")
+  })
+  
+  # 快速分组功能
+  # 全部合并为一组
+  observeEvent(input$quick_all_one, {
+    if(!is.null(values$calculated_scales) && !is.null(values$calculated_scales$summary)) {
+      scale_names <- names(values$calculated_scales$summary)
+      values$variable_groups <- list("组1" = scale_names)
+      showNotification("已将所有量表合并为一组", type = "message")
+    }
+  })
+  
+  # 每个量表一组
+  observeEvent(input$quick_each_one, {
+    if(!is.null(values$calculated_scales) && !is.null(values$calculated_scales$summary)) {
+      scale_names <- names(values$calculated_scales$summary)
+      values$variable_groups <- list()
+      for(i in seq_along(scale_names)) {
+        values$variable_groups[[paste0("组", i)]] <- scale_names[i]
+      }
+      showNotification("已重置为默认分组（每个量表一组）", type = "message")
+    }
+  })
+  
+  # 按类型分组（简单的启发式分组）
+  observeEvent(input$quick_by_type, {
+    if(!is.null(values$calculated_scales) && !is.null(values$calculated_scales$summary)) {
+      scale_names <- names(values$calculated_scales$summary)
+      
+      # 简单的类型分组逻辑
+      values$variable_groups <- list()
+      mood_scales <- scale_names[grepl("PHQ|GAD|BDI|DASS", scale_names, ignore.case = TRUE)]
+      substance_scales <- scale_names[grepl("AUDIT|FTND", scale_names, ignore.case = TRUE)]
+      motivation_scales <- scale_names[grepl("HRF|motivation", scale_names, ignore.case = TRUE)]
+      other_scales <- setdiff(scale_names, c(mood_scales, substance_scales, motivation_scales))
+      
+      group_counter <- 1
+      if(length(mood_scales) > 0) {
+        values$variable_groups[[paste0("情绪组")]] <- mood_scales
+        group_counter <- group_counter + 1
+      }
+      if(length(substance_scales) > 0) {
+        values$variable_groups[[paste0("物质组")]] <- substance_scales
+        group_counter <- group_counter + 1
+      }
+      if(length(motivation_scales) > 0) {
+        values$variable_groups[[paste0("动机组")]] <- motivation_scales
+        group_counter <- group_counter + 1
+      }
+      if(length(other_scales) > 0) {
+        values$variable_groups[[paste0("其他组")]] <- other_scales
+      }
+      
+      showNotification(paste0("已按类型自动分组，共", length(values$variable_groups), "组"), type = "message")
+    }
+  })
+  
+  # 编辑分组模式切换
+  observeEvent(input$edit_groups_mode, {
+    if(is.null(values$edit_mode)) values$edit_mode <- FALSE
+    values$edit_mode <- !values$edit_mode
+    
+    if(values$edit_mode) {
+      showNotification("已进入编辑模式，点击×可删除分组", type = "message")
+    } else {
+      showNotification("已退出编辑模式", type = "message")
+    }
+  })
+  
+  # 删除分组
+  observeEvent(input$delete_group_trigger, {
+    req(input$delete_group_trigger)
+    
+    group_to_delete <- input$delete_group_trigger
+    
+    if(group_to_delete %in% names(values$variable_groups)) {
+      # 获取被删除分组中的量表
+      deleted_scales <- values$variable_groups[[group_to_delete]]
+      
+      # 删除分组
+      values$variable_groups[[group_to_delete]] <- NULL
+      
+      # 将被删除分组中的量表重新分配为单独的组
+      if(length(deleted_scales) > 0) {
+        # 找到当前最大的组号
+        existing_group_numbers <- as.numeric(gsub("组", "", names(values$variable_groups)[grepl("^组[0-9]+$", names(values$variable_groups))]))
+        if(length(existing_group_numbers) > 0) {
+          next_group_num <- max(existing_group_numbers) + 1
+        } else {
+          next_group_num <- 1
+        }
+        
+        # 为每个被删除的量表创建新分组
+        for(scale in deleted_scales) {
+          values$variable_groups[[paste0("组", next_group_num)]] <- scale
+          next_group_num <- next_group_num + 1
+        }
+      }
+      
+      showNotification(paste0("已删除分组: ", group_to_delete, "，其中的量表已重新分配"), type = "message")
+    }
+  })
+  
+  # 重置为默认分组
+  observeEvent(input$reset_groups, {
+    if(!is.null(values$calculated_scales) && !is.null(values$calculated_scales$summary)) {
+      scale_names <- names(values$calculated_scales$summary)
+      values$variable_groups <- list()
+      for(i in seq_along(scale_names)) {
+        values$variable_groups[[paste0("组", i)]] <- scale_names[i]
+      }
+      values$edit_mode <- FALSE  # 退出编辑模式
+      showNotification("已重置为默认分组（每个量表一组）", type = "message")
+    }
   })
   
   # =============================================================================
