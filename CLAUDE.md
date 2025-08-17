@@ -9,9 +9,10 @@
 - **智能量表识别**：自动识别AUDIT、HRF、PHQ、GAD等8+种心理量表
 - **灵活变量选择**：专门的变量选择页面，支持每个量表独立选择分析层级
 - **智能数据质量评估**：实时显示完整观测数量，每个变量的缺失值统计和质量警告
+- **桥接网络分析**：识别不同量表组别间的桥接节点，支持Bridge函数和bridgeGroup分析
 - **专业网络分析**：使用quickNet包进行EBIC网络估计
 - **独立稳定性分析**：使用bootnet包进行边稳定性和中心性稳定性检验
-- **完整可视化**：网络图、中心性图、稳定性图的高质量输出
+- **完整可视化**：网络图、桥接网络图、中心性图、稳定性图的高质量输出
 
 ## 🚨 重要技术说明
 
@@ -180,6 +181,46 @@ write.csv(data.frame(netcompare_result$diff_sig), 'comparison_diff_network.csv',
 write.csv(data.frame(netcompare_result$edge_weight_p), 'comparison_pvalue_matrix.csv', row.names = TRUE)
 ```
 
+### **🌉 桥接网络分析功能**
+
+#### **功能说明**
+桥接网络分析识别连接不同心理构念组别的"桥接节点"，这些节点在临床干预中具有重要意义。
+
+#### **使用步骤**
+1. **配置变量分组**：在变量选择页面设置至少2个变量组
+2. **启用桥接分析**：在网络分析页面勾选"启用桥接网络分析"
+3. **设置参数**：选择每组识别的桥接节点数量（默认1个）
+4. **运行分析**：执行网络分析，自动进行桥接分析
+5. **查看结果**：在"桥接网络"标签页查看结果和下载
+
+#### **桥接分析核心算法**
+应用实现了与你的代码完全一致的桥接分析流程：
+
+```r
+# 基础网络构建
+base_network <- quickNet(data, threshold=0.05, groups=user_groups)
+
+# Bridge分析 - 计算桥接强度
+bridge_result <- Bridge(base_network, communities = user_groups)
+
+# bridgeGroup分析 - 识别桥接节点
+bridge_groups <- bridgeGroup(bridge_result, user_groups, n = 1, by_group = TRUE)
+
+# 可视化桥接网络（方形=桥接节点，圆形=普通节点）
+shape_list <- ifelse(bridge_groups == "Bridge", "square", "circle")
+bridge_network <- quickNet(data, groups = bridge_groups, shape = shape_list,
+                          color = c("#63bbd0","#f87599","#fed71a","#d1c2d3"))
+```
+
+#### **结果解读**
+- **桥接节点**：显示为方形，连接不同心理构念的关键变量
+- **颜色编码**：不同颜色表示不同的组别或桥接状态  
+- **临床意义**：桥接节点通常是干预的优先目标
+
+#### **导出功能**
+- **桥接网络图**：PNG格式，突出显示桥接节点
+- **桥接分析数据**：CSV格式，包含变量分组和桥接状态信息
+
 ## 🔧 开发和维护指南
 
 ### **启动应用的正确方式**
@@ -298,6 +339,13 @@ ID,Age,Gender,AUDIT10_1,AUDIT10_2,...,HRF18_1,HRF18_2,...,PHQ9_1,PHQ9_2,...
 - **其他量表** → 根据条目数和维度数自适应
 
 ## 🔄 版本历史
+
+### **v1.2 (2024-08-17) - 桥接网络分析版**
+- ✅ 新增桥接网络分析功能（Bridge Analysis）
+- ✅ 支持多组别间桥接节点识别
+- ✅ 桥接网络可视化（方形节点表示桥接节点）
+- ✅ 桥接分析结果导出和下载功能
+- ✅ 智能检测变量分组，自动启用桥接分析选项
 
 ### **v1.1 (2024-08-17) - 数据质量评估版**
 - ✅ 新增完整观测数量实时显示功能

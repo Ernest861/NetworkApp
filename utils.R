@@ -335,7 +335,7 @@ preprocess_data <- function(data, remove_outliers = FALSE) {
 #' @param edge_labels 是否显示边标签
 #' @param colors 颜色配置
 #' @return 网络分析结果
-safe_network_analysis <- function(data, threshold = 0.05, edge_labels = TRUE, colors = NULL) {
+safe_network_analysis <- function(data, threshold = 0.05, edge_labels = TRUE, colors = NULL, groups = NULL, shape = NULL, title = NULL, ...) {
   
   # 数据检查
   data <- na.omit(data)
@@ -364,12 +364,25 @@ safe_network_analysis <- function(data, threshold = 0.05, edge_labels = TRUE, co
   
   # 执行网络分析
   tryCatch({
-    network_result <- quickNet(data,
-                              threshold = threshold,
-                              edge.labels = edge_labels,
-                              posCol = VIZ_CONFIG$colors$positive_edges,
-                              negCol = VIZ_CONFIG$colors$negative_edges,
-                              color = colors)
+    # 构建quickNet参数
+    args <- list(
+      data = data,
+      threshold = threshold,
+      edge.labels = edge_labels,
+      posCol = VIZ_CONFIG$colors$positive_edges,
+      negCol = VIZ_CONFIG$colors$negative_edges,
+      color = colors
+    )
+    
+    # 添加桥接网络分析参数
+    if(!is.null(groups)) args$groups <- groups
+    if(!is.null(shape)) args$shape <- shape
+    if(!is.null(title)) args$title <- title
+    
+    # 添加其他参数
+    args <- c(args, list(...))
+    
+    network_result <- do.call(quickNet, args)
     return(network_result)
   }, error = function(e) {
     stop(paste("网络分析失败：", e$message))

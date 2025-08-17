@@ -47,9 +47,25 @@ tryCatch({
                                 missing_rates = colSums(is.na(data))/nrow(data))))
   }
   compute_scale_scores_advanced <<- function(data, scales) { return(data) }
-  safe_network_analysis <<- function(data, threshold = 0.05, edge_labels = TRUE, colors = NULL, ...) { 
+  safe_network_analysis <<- function(data, threshold = 0.05, edge_labels = TRUE, colors = NULL, groups = NULL, shape = NULL, title = NULL, ...) { 
     if(requireNamespace("quickNet", quietly = TRUE)) {
-      return(quickNet::quickNet(data, threshold = threshold, edge.labels = edge_labels, ...))
+      # 构建quickNet参数
+      args <- list(
+        data = data,
+        threshold = threshold,
+        edge.labels = edge_labels
+      )
+      
+      # 添加可选参数
+      if(!is.null(colors)) args$color <- colors
+      if(!is.null(groups)) args$groups <- groups
+      if(!is.null(shape)) args$shape <- shape
+      if(!is.null(title)) args$title <- title
+      
+      # 添加其他传递的参数
+      args <- c(args, list(...))
+      
+      return(do.call(quickNet::quickNet, args))
     } else {
       stop("quickNet package is required")
     }
@@ -422,6 +438,20 @@ ui <- dashboardPage(
               checkboxInput("show_edge_labels", "显示边权重", TRUE),
               helpText("在网络图上显示具体的相关系数"),
               
+              conditionalPanel(
+                condition = "output.hasMultipleGroups",
+                br(),
+                checkboxInput("enable_bridge_analysis", "启用桥接网络分析", FALSE),
+                helpText("分析不同组别间的桥接节点（需要已配置变量分组）"),
+                
+                conditionalPanel(
+                  condition = "input.enable_bridge_analysis",
+                  numericInput("bridge_n", "桥接节点数量", 
+                              value = 1, min = 1, max = 5, step = 1),
+                  helpText("每组识别的桥接节点数量")
+                )
+              ),
+              
               br(),
               
               div(class = "text-center",
@@ -453,7 +483,7 @@ ui <- dashboardPage(
           ),
           
           box(
-            title = "网络图", status = "success", solidHeader = TRUE, width = 9,
+            title = "标准网络图", status = "success", solidHeader = TRUE, width = 9,
             conditionalPanel(
               condition = "output.analysisComplete",
               plotOutput("network_plot", height = "500px")
@@ -467,6 +497,25 @@ ui <- dashboardPage(
             conditionalPanel(
               condition = "output.analysisComplete",
               plotOutput("centrality_plot", height = "400px")
+            )
+          )
+        ),
+        
+        # 桥接网络分析独立显示区域
+        conditionalPanel(
+          condition = "output.hasBridgeAnalysis",
+          fluidRow(
+            box(
+              title = "🌉 桥接网络分析", status = "primary", solidHeader = TRUE, width = 8,
+              plotOutput("bridge_network_plot", height = "500px")
+            ),
+            box(
+              title = "桥接分析信息", status = "info", solidHeader = TRUE, width = 4,
+              h5("🌉 桥接节点"),
+              verbatimTextOutput("bridge_nodes_info"),
+              br(),
+              h5("📊 桥接中心性"),
+              verbatimTextOutput("bridge_centrality_info")
             )
           )
         ),
@@ -525,6 +574,15 @@ ui <- dashboardPage(
                 )
               ),
               
+              # 桥接网络比较选项
+              conditionalPanel(
+                condition = "output.hasBridgeAnalysis",
+                hr(),
+                h5("🌉 桥接网络比较"),
+                checkboxInput("enable_bridge_compare", "启用桥接网络组间比较", FALSE),
+                helpText("比较两组之间的桥接节点差异（需要已进行桥接网络分析）")
+              ),
+              
               br(),
               
               div(class = "text-center",
@@ -564,7 +622,20 @@ ui <- dashboardPage(
                 ),
                 tabPanel("差异矩阵(diff_sig)", DT::dataTableOutput("group_compare_table")),
                 tabPanel("P值矩阵(edge_weight_p)", DT::dataTableOutput("p_value_matrix_table")),
-                tabPanel("组间统计", DT::dataTableOutput("group_stats_table"))
+                tabPanel("组间统计", DT::dataTableOutput("group_stats_table")),
+                conditionalPanel(
+                  condition = "output.hasBridgeCompareResult",
+                  tabPanel("桥接网络比较",
+                    h5("🌉 桥接网络组间比较结果"),
+                    plotOutput("bridge_compare_plot", height = "500px"),
+                    br(),
+                    h5("📊 桥接节点统计"),
+                    verbatimTextOutput("bridge_compare_stats"),
+                    br(),
+                    h5("📋 桥接强度差异表"),
+                    DT::dataTableOutput("bridge_diff_table")
+                  )
+                )
               )
             )
           )
@@ -836,6 +907,13 @@ ui <- dashboardPage(
               br(),
               downloadButton("download_network_plot", "下载网络图 (PNG)", class = "btn-primary"),
               br(), br(),
+              conditionalPanel(
+                condition = "output.hasBridgeAnalysis",
+                downloadButton("download_bridge_plot", "下载桥接网络图 (PNG)", class = "btn-primary"),
+                br(), br(),
+                downloadButton("download_bridge_data", "下载桥接分析结果 (CSV)", class = "btn-info"),
+                br(), br()
+              ),
               downloadButton("download_centrality_plot", "下载中心性图 (PNG)", class = "btn-primary"),
               br(), br(),
               downloadButton("download_data", "下载分析数据 (CSV)", class = "btn-info"),
@@ -2150,10 +2228,163 @@ server <- function(input, output, session) {
           values$centrality_result <- NULL
         })
         
-        incProgress(1, detail = "网络分析完成!")
-        
-        # 保存分析hash用于缓存
+        # 保存分析hash用于缓存（提前保存，确保主网络分析已完成）
         values$last_analysis_hash <- analysis_hash
+        
+        # 桥接网络分析（如果启用且有多个组别）- 完全独立的分析步骤
+        # 桥接分析条件检查和调试
+        cat("桥接分析条件检查:\n")
+        cat("enable_bridge_analysis:", input$enable_bridge_analysis, "\n")
+        cat("variable_groups存在:", !is.null(values$variable_groups), "\n")
+        cat("variable_groups长度:", if(!is.null(values$variable_groups)) length(values$variable_groups) else 0, "\n")
+        cat("variable_groups内容:", str(values$variable_groups), "\n")
+        
+        if(!is.null(input$enable_bridge_analysis) && input$enable_bridge_analysis && 
+           !is.null(values$variable_groups) && length(values$variable_groups) >= 2) {
+          
+          incProgress(0.8, detail = "进行桥接网络分析...")
+          cat("开始桥接网络分析...\n")
+          
+          tryCatch({
+            # 准备桥接分析的分组信息
+            bridge_groups <- tryCatch({
+              if(!is.null(values$variable_groups) && length(values$variable_groups) > 0) {
+                # 转换为变量索引格式的分组（与前面的逻辑一致）
+                variable_names <- colnames(analysis_data_final)
+                groups_by_index <- list()
+                
+                for(i in seq_along(values$variable_groups)) {
+                  group_name <- names(values$variable_groups)[i]
+                  scales_in_group <- values$variable_groups[[i]]
+                  
+                  # 找到属于这个分组的变量索引
+                  group_indices <- c()
+                  for(scale_name in scales_in_group) {
+                    matching_indices <- which(
+                      variable_names == scale_name |
+                      startsWith(variable_names, paste0(scale_name, "_")) |
+                      endsWith(variable_names, paste0("_", scale_name)) |
+                      grepl(scale_name, variable_names, fixed = TRUE)
+                    )
+                    group_indices <- c(group_indices, matching_indices)
+                  }
+                  
+                  if(length(group_indices) > 0) {
+                    groups_by_index[[group_name]] <- sort(unique(group_indices))
+                  }
+                }
+                
+                groups_by_index
+              } else {
+                NULL
+              }
+            }, error = function(e) {
+              showNotification(paste("分组配置错误:", e$message), type = "warning")
+              NULL
+            })
+            
+            if(!is.null(bridge_groups) && length(bridge_groups) >= 2) {
+              
+              # 执行桥接分析
+              if(requireNamespace("quickNet", quietly = TRUE)) {
+                
+                # 验证并调整communities格式
+                total_vars <- ncol(analysis_data_final)
+                
+                # 确保所有变量都被分配到某个组
+                all_assigned <- unique(unlist(bridge_groups))
+                missing_vars <- setdiff(1:total_vars, all_assigned)
+                
+                if(length(missing_vars) > 0) {
+                  # 创建一个额外的组包含未分配的变量
+                  bridge_groups[["其他"]] <- missing_vars
+                }
+                
+                # 验证索引范围和communities格式
+                max_index <- max(unlist(bridge_groups))
+                if(max_index > total_vars) {
+                  showNotification(paste0("分组索引超出变量范围，桥接分析失败 (最大索引:", max_index, ", 变量数:", total_vars, ")"), type = "error")
+                  values$bridge_result <- NULL
+                  values$bridge_network <- NULL
+                } else {
+                  # 打印调试信息
+                  cat("桥接分析 - 变量数:", total_vars, "\n")
+                  cat("桥接分析 - 分组数:", length(bridge_groups), "\n")
+                  cat("桥接分析 - 分组结构:", str(bridge_groups), "\n")
+                  cat("桥接分析 - 变量名称:", colnames(analysis_data_final), "\n")
+                  cat("桥接分析 - values$variable_groups:", str(values$variable_groups), "\n")
+                  # 首先构建用于桥接分析的网络（与主网络相同参数）
+                  bridge_network_base <- safe_network_analysis(
+                    data = analysis_data_final,
+                    threshold = input$threshold %||% 0.05,
+                    edge_labels = input$show_edge_labels %||% TRUE,
+                    colors = colors
+                  )
+                  
+                  # Bridge分析 - 使用验证过的communities
+                  values$bridge_result <- Bridge(bridge_network_base, communities = bridge_groups)
+                  
+                  # bridgeGroup分析 - 识别桥接节点
+                  bridge_n <- input$bridge_n %||% 1
+                  values$bridge_groups <- bridgeGroup(values$bridge_result, bridge_groups, 
+                                                     labels = NULL, n = bridge_n, by_group = TRUE)
+                  
+                  # 调试输出：检查bridgeGroup返回值
+                  cat("bridgeGroup返回值类型:", class(values$bridge_groups), "\n")
+                  cat("bridgeGroup返回值长度:", length(values$bridge_groups), "\n")
+                  cat("bridgeGroup返回值内容:", str(values$bridge_groups), "\n")
+                  if(is.vector(values$bridge_groups)) {
+                    cat("唯一值:", unique(values$bridge_groups), "\n")
+                  }
+                  
+                  # 创建桥接节点的形状信息
+                  shape_list <- ifelse(values$bridge_groups == "Bridge", "square", "circle")
+                  
+                  # 为桥接网络设计配色方案
+                  bridge_colors <- c("#63bbd0", "#f87599", "#fed71a", "#d1c2d3")  # 参考提供的代码
+                  unique_groups <- unique(values$bridge_groups)
+                  bridge_color_map <- bridge_colors[1:length(unique_groups)]
+                  names(bridge_color_map) <- unique_groups
+                  
+                  # 生成桥接网络图（突出显示桥接节点）
+                  values$bridge_network <- safe_network_analysis(
+                    data = analysis_data_final,
+                  threshold = input$threshold %||% 0.05,
+                  edge_labels = input$show_edge_labels %||% TRUE,
+                  colors = bridge_color_map[values$bridge_groups],
+                  groups = values$bridge_groups,
+                  shape = shape_list,
+                  title = "Bridge Network Analysis"
+                )
+                
+                showNotification("桥接网络分析完成！", type = "message")
+                }
+              } else {
+                showNotification("quickNet包不可用，跳过桥接分析", type = "warning")
+                values$bridge_result <- NULL
+                values$bridge_network <- NULL
+              }
+            } else {
+              showNotification("桥接分析需要至少2个变量组", type = "warning")
+              values$bridge_result <- NULL
+              values$bridge_network <- NULL
+            }
+            
+          }, error = function(e) {
+            showNotification(paste("桥接分析失败:", e$message), type = "warning")
+            values$bridge_result <- NULL
+            values$bridge_network <- NULL
+            values$bridge_groups <- NULL
+            # 确保桥接分析失败不影响主网络分析
+            cat("桥接分析错误（不影响主网络）:", e$message, "\n")
+          })
+        } else {
+          # 如果没有启用桥接分析，清空相关结果
+          values$bridge_result <- NULL
+          values$bridge_network <- NULL
+        }
+        
+        incProgress(1, detail = "网络分析完成!")
         
         showNotification(paste0("网络分析完成！使用了 ", n_vars, " 个变量，", complete_cases, " 个完整案例"), type = "message")
         
@@ -2181,6 +2412,9 @@ server <- function(input, output, session) {
   output$network_plot <- renderPlot({
     req(values$network_result)
     
+    # 调试信息
+    cat("正在渲染网络图，network_result类型:", class(values$network_result), "\n")
+    
     # 检查network_result是否为有效对象
     if (is.null(values$network_result)) {
       plot.new()
@@ -2206,6 +2440,147 @@ server <- function(input, output, session) {
       # 绘图失败时显示错误信息
       plot.new()
       text(0.5, 0.5, paste("绘图失败:", e$message), cex = 1, col = "red", adj = c(0.5, 0.5))
+    })
+  })
+  
+  # 桥接网络图输出
+  output$bridge_network_plot <- renderPlot({
+    req(values$bridge_network)
+    
+    # 检查桥接网络结果是否为有效对象
+    if (is.null(values$bridge_network)) {
+      plot.new()
+      text(0.5, 0.5, "桥接网络结果为空", cex = 1.2, col = "red")
+      return(NULL)
+    }
+    
+    # 绘制桥接网络图
+    tryCatch({
+      if (inherits(values$bridge_network, c("quickNet", "qgraph", "igraph"))) {
+        plot(values$bridge_network)
+      } else {
+        if (is.list(values$bridge_network) && !is.null(values$bridge_network$graph)) {
+          plot(values$bridge_network$graph)
+        } else {
+          plot.new()
+          text(0.5, 0.5, "无法绘制桥接网络图：格式不支持", cex = 1.2, col = "orange")
+        }
+      }
+    }, error = function(e) {
+      plot.new()
+      text(0.5, 0.5, paste("桥接网络绘图失败:", e$message), cex = 1, col = "red", adj = c(0.5, 0.5))
+    })
+  })
+  
+  # 桥接节点信息输出
+  output$bridge_nodes_info <- renderText({
+    req(values$bridge_groups)
+    
+    if(is.null(values$bridge_groups)) {
+      return("未找到桥接节点信息")
+    }
+    
+    # 调试输出：显示bridge_groups的实际内容
+    cat("桥接节点信息 - bridge_groups类型:", class(values$bridge_groups), "\n")
+    cat("桥接节点信息 - bridge_groups长度:", length(values$bridge_groups), "\n")
+    cat("桥接节点信息 - bridge_groups内容:", values$bridge_groups, "\n")
+    cat("桥接节点信息 - bridge_groups名称:", names(values$bridge_groups), "\n")
+    
+    # 统计桥接节点 - 处理多种可能的格式
+    bridge_nodes <- c()
+    if(is.vector(values$bridge_groups) && !is.null(names(values$bridge_groups))) {
+      # 情况1：命名向量，桥接节点标记为"Bridge"
+      bridge_nodes <- names(values$bridge_groups)[values$bridge_groups == "Bridge"]
+    } else if(is.list(values$bridge_groups) && !is.null(values$bridge_groups$Bridge)) {
+      # 情况2：列表格式，包含Bridge元素
+      bridge_nodes <- values$bridge_groups$Bridge
+    } else if(is.character(values$bridge_groups)) {
+      # 情况3：字符向量，直接包含桥接节点名称
+      bridge_nodes <- values$bridge_groups
+    }
+    
+    if(length(bridge_nodes) == 0) {
+      return("在当前阈值下未识别到桥接节点\n\n💡 提示：\n• 尝试降低网络阈值\n• 增加桥接节点数量(n)参数\n• 检查变量分组是否合理")
+    }
+    
+    # 格式化输出
+    result <- paste0("🌉 识别到 ", length(bridge_nodes), " 个桥接节点：\n\n")
+    result <- paste0(result, paste(bridge_nodes, collapse = ", "), "\n\n")
+    
+    # 添加各组的节点信息
+    result <- paste0(result, "📊 各组节点分布：\n")
+    for(group_name in unique(values$bridge_groups)) {
+      group_nodes <- names(values$bridge_groups)[values$bridge_groups == group_name]
+      result <- paste0(result, "• ", group_name, " (", length(group_nodes), " 个): ", 
+                      paste(head(group_nodes, 5), collapse = ", "))
+      if(length(group_nodes) > 5) {
+        result <- paste0(result, "...")
+      }
+      result <- paste0(result, "\n")
+    }
+    
+    return(result)
+  })
+  
+  # 桥接中心性信息输出
+  output$bridge_centrality_info <- renderText({
+    req(values$bridge_result, values$bridge_groups)
+    
+    tryCatch({
+      if(is.null(values$bridge_result) || is.null(values$bridge_groups)) {
+        return("未找到桥接分析结果")
+      }
+      
+      # 提取桥接中心性信息
+      if(is.list(values$bridge_result) && !is.null(values$bridge_result$bridge)) {
+        bridge_centrality <- values$bridge_result$bridge
+        variable_names <- names(values$bridge_groups)
+        
+        # 找到桥接节点
+        bridge_nodes <- variable_names[values$bridge_groups == "Bridge"]
+        
+        if(length(bridge_nodes) > 0 && length(bridge_centrality) >= length(variable_names)) {
+          # 提取桥接节点的中心性值
+          bridge_indices <- which(values$bridge_groups == "Bridge")
+          bridge_cent_values <- bridge_centrality[bridge_indices]
+          
+          # 排序显示
+          if(length(bridge_cent_values) > 0) {
+            bridge_ranking <- data.frame(
+              Node = bridge_nodes,
+              BridgeCentrality = round(bridge_cent_values, 4),
+              stringsAsFactors = FALSE
+            )
+            bridge_ranking <- bridge_ranking[order(-bridge_ranking$BridgeCentrality), ]
+            
+            result <- paste0(
+              "🌉 桥接中心性排名\n",
+              "=" * 20, "\n\n"
+            )
+            
+            for(i in 1:nrow(bridge_ranking)) {
+              result <- paste0(result, 
+                sprintf("%d. %s: %.4f\n", i, bridge_ranking$Node[i], bridge_ranking$BridgeCentrality[i])
+              )
+            }
+            
+            # 添加解释
+            result <- paste0(result, "\n",
+              "💡 说明：\n",
+              "• 数值越高，该节点的桥接作用越强\n",
+              "• 桥接中心性衡量节点连接不同社群的能力\n",
+              "• 高桥接中心性的节点是干预的重点目标"
+            )
+            
+            return(result)
+          }
+        }
+      }
+      
+      return("桥接中心性信息不可用")
+      
+    }, error = function(e) {
+      return(paste("桥接中心性计算失败:", e$message))
     })
   })
   
@@ -2338,11 +2713,26 @@ server <- function(input, output, session) {
       # 获取分析数据中的数值型变量（用于数值分组）
       numeric_vars <- names(values$analysis_data)[sapply(values$analysis_data, is.numeric)]
       
+      # 调试输出
+      cat("更新分组变量选择:\n")
+      cat("analysis_data变量:", names(values$analysis_data), "\n")
+      cat("processed_data变量:", names(values$processed_data), "\n")
+      cat("数值型变量:", numeric_vars, "\n")
+      
       # 获取原始数据中的分类变量（用于分类分组）
       # 查找可能的分类变量：字符型、因子型，或值较少的数值型变量
       categorical_candidates <- c()
       for(col_name in names(values$processed_data)) {
         col_data <- values$processed_data[[col_name]]
+        
+        # 调试输出每个变量的情况
+        if(col_name %in% c("Gender", "ID", "Age")) {
+          cat("检查变量", col_name, ":\n")
+          cat("  类型:", class(col_data), "\n")
+          cat("  唯一值数量:", length(unique(col_data[!is.na(col_data)])), "\n")
+          cat("  唯一值:", unique(col_data[!is.na(col_data)]), "\n")
+          cat("  缺失值数量:", sum(is.na(col_data)), "\n")
+        }
         
         # 字符型或因子型变量
         if(is.character(col_data) || is.factor(col_data)) {
@@ -2359,6 +2749,8 @@ server <- function(input, output, session) {
           }
         }
       }
+      
+      cat("分类变量候选:", categorical_candidates, "\n")
       
       # 组合选项
       all_choices <- list()
@@ -2403,17 +2795,67 @@ server <- function(input, output, session) {
       if(input$group_variable %in% names(values$analysis_data)) {
         group_var <- values$analysis_data[[input$group_variable]]
         data_source <- "analysis"
+        cat("从analysis_data获取分组变量:", input$group_variable, "\n")
       } else if(input$group_variable %in% names(values$processed_data)) {
         group_var <- values$processed_data[[input$group_variable]]
         data_source <- "processed"
+        cat("从processed_data获取分组变量:", input$group_variable, "\n")
       } else {
+        cat("分组变量不存在 - input$group_variable:", input$group_variable, "\n")
+        cat("analysis_data变量名:", names(values$analysis_data), "\n")
+        cat("processed_data变量名:", names(values$processed_data), "\n")
         showNotification("未找到选择的分组变量", type = "error")
         return()
       }
       
+      # 调试输出
+      cat("分组变量值:", head(group_var, 20), "\n")
+      cat("分组变量类型:", class(group_var), "\n")
+      cat("分组变量长度:", length(group_var), "\n")
+      cat("缺失值数量:", sum(is.na(group_var)), "\n")
+      
+      # 严格的数据验证
       if(all(is.na(group_var))) {
         showNotification("选择的分组变量全为缺失值", type = "error")
         return()
+      }
+      
+      # 检查无穷值
+      if(any(is.infinite(group_var), na.rm = TRUE)) {
+        showNotification("分组变量包含无穷值，请检查数据质量", type = "error")
+        return()
+      }
+      
+      # 检查有效值数量 - 修复：字符型变量不需要is.finite检查
+      if(is.numeric(group_var)) {
+        valid_values <- group_var[!is.na(group_var) & is.finite(group_var)]
+      } else {
+        valid_values <- group_var[!is.na(group_var)]
+      }
+      
+      cat("有效值数量:", length(valid_values), "\n")
+      cat("有效值内容:", head(valid_values, 10), "\n")
+      
+      if(length(valid_values) < 20) {
+        showNotification(paste0("分组变量有效值过少 (", length(valid_values), ")，建议至少20个有效值"), type = "error")
+        return()
+      }
+      
+      # 检查变异性（对于数值变量）
+      if(is.numeric(valid_values) && sd(valid_values, na.rm = TRUE) == 0) {
+        showNotification("分组变量没有变异性（所有值相同），无法进行分组", type = "error")
+        return()
+      }
+      
+      # 检查分类变量的唯一值数量
+      if(is.character(valid_values) || is.factor(valid_values)) {
+        unique_count <- length(unique(valid_values))
+        cat("分类变量唯一值数量:", unique_count, "\n")
+        cat("唯一值:", unique(valid_values), "\n")
+        if(unique_count < 2) {
+          showNotification("分类变量只有一个类别，无法进行分组比较", type = "error")
+          return()
+        }
       }
       
       # 根据选择的方法进行分组
@@ -2435,38 +2877,42 @@ server <- function(input, output, session) {
         threshold <- NULL
         
         if(input$group_method == "median") {
-          threshold <- median(group_var, na.rm = TRUE)
-          group_indices1 <- group_var < threshold & !is.na(group_var)
-          group_indices2 <- group_var >= threshold & !is.na(group_var)
+          if(!is.numeric(group_var)) {
+            showNotification("中位数分组只适用于数值变量，请选择'分类变量分组'方法", type = "error")
+            return()
+          }
+          threshold <- median(valid_values)
+          group_indices1 <- group_var < threshold & !is.na(group_var) & is.finite(group_var)
+          group_indices2 <- group_var >= threshold & !is.na(group_var) & is.finite(group_var)
           group1_data <- values$analysis_data[group_indices1, ]
           group2_data <- values$analysis_data[group_indices2, ]
           group1_name <- paste0(input$group_variable, "_低分组")
           group2_name <- paste0(input$group_variable, "_高分组")
         } else if(input$group_method == "mean") {
-          threshold <- mean(group_var, na.rm = TRUE)
-          group_indices1 <- group_var < threshold & !is.na(group_var)
-          group_indices2 <- group_var >= threshold & !is.na(group_var)
+          threshold <- mean(valid_values)
+          group_indices1 <- group_var < threshold & !is.na(group_var) & is.finite(group_var)
+          group_indices2 <- group_var >= threshold & !is.na(group_var) & is.finite(group_var)
           group1_data <- values$analysis_data[group_indices1, ]
           group2_data <- values$analysis_data[group_indices2, ]
           group1_name <- paste0(input$group_variable, "_低分组")
           group2_name <- paste0(input$group_variable, "_高分组")
         } else if(input$group_method == "tertile") {
-          q1 <- quantile(group_var, 0.33, na.rm = TRUE)
-          q3 <- quantile(group_var, 0.67, na.rm = TRUE)
+          q1 <- quantile(valid_values, 0.33)
+          q3 <- quantile(valid_values, 0.67)
           threshold <- paste0("Q1=", round(q1, 2), ", Q3=", round(q3, 2))  # 记录分位数信息
-          group_indices1 <- group_var <= q1 & !is.na(group_var)
-          group_indices2 <- group_var >= q3 & !is.na(group_var)
+          group_indices1 <- group_var <= q1 & !is.na(group_var) & is.finite(group_var)
+          group_indices2 <- group_var >= q3 & !is.na(group_var) & is.finite(group_var)
           group1_data <- values$analysis_data[group_indices1, ]
           group2_data <- values$analysis_data[group_indices2, ]
           group1_name <- paste0(input$group_variable, "_低三分位")
           group2_name <- paste0(input$group_variable, "_高三分位")
         } else if(input$group_method == "extreme_27") {
           # 前后27%分组
-          q27 <- quantile(group_var, 0.27, na.rm = TRUE)
-          q73 <- quantile(group_var, 0.73, na.rm = TRUE)
+          q27 <- quantile(valid_values, 0.27)
+          q73 <- quantile(valid_values, 0.73)
           threshold <- paste0("Q27=", round(q27, 2), ", Q73=", round(q73, 2))  # 记录分位数信息
-          group_indices1 <- group_var <= q27 & !is.na(group_var)
-          group_indices2 <- group_var >= q73 & !is.na(group_var)
+          group_indices1 <- group_var <= q27 & !is.na(group_var) & is.finite(group_var)
+          group_indices2 <- group_var >= q73 & !is.na(group_var) & is.finite(group_var)
           group1_data <- values$analysis_data[group_indices1, ]
           group2_data <- values$analysis_data[group_indices2, ]
           group1_name <- paste0(input$group_variable, "_低27%")
@@ -2474,6 +2920,10 @@ server <- function(input, output, session) {
         } else if(input$group_method == "categorical") {
           # 分类变量分组
           unique_values <- unique(group_var[!is.na(group_var)])
+          
+          cat("分类变量分组调试:\n")
+          cat("唯一值:", unique_values, "\n")
+          cat("唯一值数量:", length(unique_values), "\n")
           
           if(length(unique_values) < 2) {
             showNotification("分类变量值少于2个，无法分组", type = "error")
@@ -2489,22 +2939,34 @@ server <- function(input, output, session) {
           value_counts <- table(group_var)
           sorted_values <- sort(value_counts, decreasing = TRUE)
           
+          cat("值计数:", value_counts, "\n")
+          cat("排序后的值:", names(sorted_values), "\n")
+          
           if(length(sorted_values) >= 2) {
             value1 <- names(sorted_values)[1]
             value2 <- names(sorted_values)[2]
             threshold <- paste0(value1, " vs ", value2)  # 记录分类信息
             
+            cat("选择的两个类别:", value1, "vs", value2, "\n")
+            
             group_indices1 <- group_var == value1 & !is.na(group_var)
             group_indices2 <- group_var == value2 & !is.na(group_var)
+            
+            cat("组1索引数量:", sum(group_indices1), "\n")
+            cat("组2索引数量:", sum(group_indices2), "\n")
+            
             group1_data <- values$analysis_data[group_indices1, ]
             group2_data <- values$analysis_data[group_indices2, ]
             group1_name <- paste0(input$group_variable, "_", value1)
             group2_name <- paste0(input$group_variable, "_", value2)
+            
+            cat("组1数据行数:", nrow(group1_data), "\n")
+            cat("组2数据行数:", nrow(group2_data), "\n")
           }
         } else if(input$group_method == "custom") {
           threshold <- input$custom_threshold
-          group_indices1 <- group_var < threshold & !is.na(group_var)
-          group_indices2 <- group_var >= threshold & !is.na(group_var)
+          group_indices1 <- group_var < threshold & !is.na(group_var) & is.finite(group_var)
+          group_indices2 <- group_var >= threshold & !is.na(group_var) & is.finite(group_var)
           group1_data <- values$analysis_data[group_indices1, ]
           group2_data <- values$analysis_data[group_indices2, ]
           group1_name <- paste0(input$group_variable, "_<", threshold)
@@ -2568,6 +3030,86 @@ server <- function(input, output, session) {
             permutation_n = input$permutation_n,
             p_adjust_method = input$p_adjust_method
           )
+          
+          # 桥接网络比较分析（如果启用）
+          if(!is.null(input$enable_bridge_compare) && input$enable_bridge_compare && 
+             !is.null(values$bridge_result) && !is.null(values$bridge_groups)) {
+            
+            incProgress(0.9, detail = "进行桥接网络比较分析...")
+            
+            tryCatch({
+              # 为两组数据分别进行桥接分析
+              bridge_groups_template <- values$variable_groups  # 使用原始的变量分组
+              
+              # 组1桥接分析
+              if(requireNamespace("quickNet", quietly = TRUE)) {
+                # 构建组1的网络用于桥接分析
+                group1_network <- safe_network_analysis(
+                  data = group1_data,
+                  threshold = input$threshold %||% 0.05,
+                  edge_labels = FALSE  # 桥接比较时简化显示
+                )
+                
+                # 组1桥接分析
+                group1_bridge_result <- Bridge(group1_network, communities = bridge_groups_template)
+                group1_bridge_groups <- bridgeGroup(group1_bridge_result, bridge_groups_template, 
+                                                   labels = NULL, n = input$bridge_n %||% 1, by_group = TRUE)
+                
+                # 构建组2的网络用于桥接分析
+                group2_network <- safe_network_analysis(
+                  data = group2_data,
+                  threshold = input$threshold %||% 0.05,
+                  edge_labels = FALSE
+                )
+                
+                # 组2桥接分析
+                group2_bridge_result <- Bridge(group2_network, communities = bridge_groups_template)
+                group2_bridge_groups <- bridgeGroup(group2_bridge_result, bridge_groups_template, 
+                                                   labels = NULL, n = input$bridge_n %||% 1, by_group = TRUE)
+                
+                # 比较桥接节点
+                all_vars <- names(group1_bridge_groups)
+                bridge_comparison <- data.frame(
+                  Variable = all_vars,
+                  Group1_BridgeStatus = group1_bridge_groups[all_vars],
+                  Group2_BridgeStatus = group2_bridge_groups[all_vars],
+                  stringsAsFactors = FALSE
+                )
+                
+                # 识别桥接状态变化
+                bridge_comparison$StatusChange <- ifelse(
+                  bridge_comparison$Group1_BridgeStatus != bridge_comparison$Group2_BridgeStatus,
+                  paste0(bridge_comparison$Group1_BridgeStatus, " → ", bridge_comparison$Group2_BridgeStatus),
+                  "无变化"
+                )
+                
+                # 统计桥接节点
+                group1_bridges <- all_vars[group1_bridge_groups == "Bridge"]
+                group2_bridges <- all_vars[group2_bridge_groups == "Bridge"]
+                
+                # 保存桥接比较结果
+                values$bridge_compare_result <- list(
+                  group1_bridge_result = group1_bridge_result,
+                  group2_bridge_result = group2_bridge_result,
+                  group1_bridge_groups = group1_bridge_groups,
+                  group2_bridge_groups = group2_bridge_groups,
+                  bridge_comparison = bridge_comparison,
+                  group1_bridges = group1_bridges,
+                  group2_bridges = group2_bridges,
+                  group1_name = group1_name,
+                  group2_name = group2_name
+                )
+                
+                showNotification(paste0("桥接网络比较完成！组1: ", length(group1_bridges), " 个桥接节点，组2: ", length(group2_bridges), " 个桥接节点"), type = "message")
+              }
+            }, error = function(e) {
+              showNotification(paste("桥接网络比较失败:", e$message), type = "warning")
+              values$bridge_compare_result <- NULL
+            })
+          } else {
+            # 如果没有启用桥接比较，清空相关结果
+            values$bridge_compare_result <- NULL
+          }
           
           incProgress(1, detail = "组间比较完成!")
           
@@ -2833,7 +3375,269 @@ server <- function(input, output, session) {
     })
   })
   
+  # 桥接网络比较输出
+  # 桥接比较图
+  output$bridge_compare_plot <- renderPlot({
+    req(values$bridge_compare_result)
+    
+    tryCatch({
+      result <- values$bridge_compare_result
+      
+      # 创建桥接节点比较的可视化
+      group1_bridges <- result$group1_bridges
+      group2_bridges <- result$group2_bridges
+      all_vars <- names(result$group1_bridge_groups)
+      
+      # 创建比较矩阵
+      comparison_data <- data.frame(
+        Variable = all_vars,
+        Group1 = ifelse(all_vars %in% group1_bridges, 1, 0),
+        Group2 = ifelse(all_vars %in% group2_bridges, 1, 0),
+        stringsAsFactors = FALSE
+      )
+      
+      # 计算变化类型
+      comparison_data$Change <- ifelse(
+        comparison_data$Group1 == 1 & comparison_data$Group2 == 1, "两组都是桥接节点",
+        ifelse(comparison_data$Group1 == 1 & comparison_data$Group2 == 0, paste0(result$group1_name, "独有"),
+               ifelse(comparison_data$Group1 == 0 & comparison_data$Group2 == 1, paste0(result$group2_name, "独有"),
+                      "两组都不是桥接节点"))
+      )
+      
+      # 使用base R绘图
+      if(requireNamespace("ggplot2", quietly = TRUE)) {
+        # 如果有ggplot2，使用更好的可视化
+        library(ggplot2, quietly = TRUE)
+        
+        # 准备数据用于ggplot
+        plot_data <- comparison_data[comparison_data$Group1 == 1 | comparison_data$Group2 == 1, ]
+        if(nrow(plot_data) > 0) {
+          plot_data$Group1_status <- ifelse(plot_data$Group1 == 1, result$group1_name, "")
+          plot_data$Group2_status <- ifelse(plot_data$Group2 == 1, result$group2_name, "")
+          
+          p <- ggplot(plot_data, aes(x = Variable)) +
+            geom_point(aes(y = 1, color = result$group1_name), 
+                      data = plot_data[plot_data$Group1 == 1, ], size = 4) +
+            geom_point(aes(y = 0, color = result$group2_name), 
+                      data = plot_data[plot_data$Group2 == 1, ], size = 4) +
+            scale_color_manual(values = c("#2376b7", "#d2568c")) +
+            scale_y_continuous(breaks = c(0, 1), labels = c(result$group2_name, result$group1_name)) +
+            labs(title = "桥接节点组间比较", 
+                 x = "变量", y = "组别", color = "桥接节点") +
+            theme_minimal() +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                  plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+          
+          print(p)
+        } else {
+          plot.new()
+          text(0.5, 0.5, "两组均无桥接节点", cex = 1.5, col = "gray")
+        }
+      } else {
+        # 使用base R绘图
+        bridge_vars <- comparison_data[comparison_data$Group1 == 1 | comparison_data$Group2 == 1, ]
+        if(nrow(bridge_vars) > 0) {
+          plot(1, type = "n", xlim = c(0, nrow(bridge_vars)+1), ylim = c(-0.5, 1.5),
+               xlab = "桥接节点", ylab = "组别", main = "桥接节点组间比较")
+          
+          for(i in 1:nrow(bridge_vars)) {
+            var_name <- bridge_vars$Variable[i]
+            if(bridge_vars$Group1[i] == 1) {
+              points(i, 1, pch = 16, col = "#2376b7", cex = 2)
+            }
+            if(bridge_vars$Group2[i] == 1) {
+              points(i, 0, pch = 16, col = "#d2568c", cex = 2)
+            }
+            text(i, -0.3, var_name, srt = 45, adj = 1, cex = 0.8)
+          }
+          
+          legend("topright", legend = c(result$group1_name, result$group2_name),
+                 col = c("#2376b7", "#d2568c"), pch = 16)
+        } else {
+          plot.new()
+          text(0.5, 0.5, "两组均无桥接节点", cex = 1.5, col = "gray")
+        }
+      }
+      
+    }, error = function(e) {
+      plot.new()
+      text(0.5, 0.5, paste("桥接比较图生成失败:", e$message), cex = 1, col = "red")
+    })
+  })
+  
+  # 桥接比较统计信息
+  output$bridge_compare_stats <- renderText({
+    req(values$bridge_compare_result)
+    
+    tryCatch({
+      result <- values$bridge_compare_result
+      
+      group1_bridges <- result$group1_bridges
+      group2_bridges <- result$group2_bridges
+      
+      # 计算重叠和独有节点
+      common_bridges <- intersect(group1_bridges, group2_bridges)
+      group1_unique <- setdiff(group1_bridges, group2_bridges)
+      group2_unique <- setdiff(group2_bridges, group1_bridges)
+      
+      # 格式化输出
+      output_text <- paste0(
+        "🌉 桥接节点比较统计\n",
+        "=" * 40, "\n\n",
+        "📊 基本统计：\n",
+        "• ", result$group1_name, "：", length(group1_bridges), " 个桥接节点\n",
+        "• ", result$group2_name, "：", length(group2_bridges), " 个桥接节点\n",
+        "• 共同桥接节点：", length(common_bridges), " 个\n\n",
+        
+        "🔍 详细分析：\n"
+      )
+      
+      if(length(common_bridges) > 0) {
+        output_text <- paste0(output_text,
+          "• 两组共同的桥接节点：\n  ", paste(common_bridges, collapse = ", "), "\n\n"
+        )
+      }
+      
+      if(length(group1_unique) > 0) {
+        output_text <- paste0(output_text,
+          "• ", result$group1_name, " 独有的桥接节点：\n  ", paste(group1_unique, collapse = ", "), "\n\n"
+        )
+      }
+      
+      if(length(group2_unique) > 0) {
+        output_text <- paste0(output_text,
+          "• ", result$group2_name, " 独有的桥接节点：\n  ", paste(group2_unique, collapse = ", "), "\n\n"
+        )
+      }
+      
+      # 添加重叠比例
+      total_unique_bridges <- length(union(group1_bridges, group2_bridges))
+      if(total_unique_bridges > 0) {
+        overlap_pct <- round(length(common_bridges) / total_unique_bridges * 100, 1)
+        output_text <- paste0(output_text,
+          "📈 重叠度分析：\n",
+          "• 桥接节点重叠比例：", overlap_pct, "%\n",
+          "• 总计不重复桥接节点：", total_unique_bridges, " 个\n"
+        )
+      }
+      
+      return(output_text)
+      
+    }, error = function(e) {
+      return(paste("桥接比较统计失败:", e$message))
+    })
+  })
+  
+  # 桥接差异表
+  output$bridge_diff_table <- DT::renderDataTable({
+    req(values$bridge_compare_result)
+    
+    tryCatch({
+      result <- values$bridge_compare_result
+      bridge_comparison <- result$bridge_comparison
+      
+      # 只显示有变化的变量或桥接节点
+      interesting_vars <- bridge_comparison[
+        bridge_comparison$StatusChange != "无变化" | 
+        bridge_comparison$Group1_BridgeStatus == "Bridge" | 
+        bridge_comparison$Group2_BridgeStatus == "Bridge", 
+      ]
+      
+      if(nrow(interesting_vars) > 0) {
+        # 重命名列
+        names(interesting_vars) <- c("变量", paste0(result$group1_name, "_状态"), 
+                                    paste0(result$group2_name, "_状态"), "状态变化")
+        
+        DT::datatable(interesting_vars, 
+                     options = list(pageLength = 15, scrollX = TRUE),
+                     rownames = FALSE) %>%
+          DT::formatStyle(columns = "状态变化", 
+                         backgroundColor = DT::styleEqual("无变化", "#f8f9fa"),
+                         color = DT::styleEqual("无变化", "#6c757d"))
+      } else {
+        # 如果没有有趣的变化，显示所有变量
+        names(bridge_comparison) <- c("变量", paste0(result$group1_name, "_状态"), 
+                                    paste0(result$group2_name, "_状态"), "状态变化")
+        
+        DT::datatable(bridge_comparison, 
+                     options = list(pageLength = 15, scrollX = TRUE),
+                     rownames = FALSE)
+      }
+      
+    }, error = function(e) {
+      error_df <- data.frame(
+        错误信息 = paste("桥接差异表生成失败:", e$message),
+        stringsAsFactors = FALSE
+      )
+      DT::datatable(error_df, options = list(dom = 't'), rownames = FALSE)
+    })
+  })
+  
   # 下载处理
+  # 桥接网络图下载
+  output$download_bridge_plot <- downloadHandler(
+    filename = function() {
+      paste0("bridge_network_plot_", Sys.Date(), ".png")
+    },
+    content = function(file) {
+      if(!is.null(values$bridge_network)) {
+        png(file, width = 800, height = 600, res = 100)
+        tryCatch({
+          print(values$bridge_network)
+        }, error = function(e) {
+          plot.new()
+          text(0.5, 0.5, paste("无法生成桥接网络图:", e$message), cex = 1, col = "red")
+        })
+        dev.off()
+      } else {
+        # 如果没有桥接网络结果，创建空白图片
+        png(file, width = 800, height = 600, res = 100)
+        plot.new()
+        text(0.5, 0.5, "桥接网络分析未运行", cex = 1.5, col = "gray")
+        dev.off()
+      }
+    }
+  )
+  
+  # 桥接分析数据下载
+  output$download_bridge_data <- downloadHandler(
+    filename = function() {
+      paste0("bridge_analysis_results_", Sys.Date(), ".csv")
+    },
+    content = function(file) {
+      if(!is.null(values$bridge_groups) && !is.null(values$bridge_result)) {
+        # 创建桥接分析结果数据框
+        bridge_df <- data.frame(
+          Variable = names(values$bridge_groups),
+          Group = values$bridge_groups,
+          IsBridge = values$bridge_groups == "Bridge",
+          stringsAsFactors = FALSE
+        )
+        
+        # 如果有bridge_result的额外信息，可以添加
+        if(is.list(values$bridge_result) && !is.null(values$bridge_result$bridge)) {
+          # 尝试添加桥接强度等信息
+          tryCatch({
+            if(!is.null(values$bridge_result$bridge) && length(values$bridge_result$bridge) == nrow(bridge_df)) {
+              bridge_df$BridgeStrength <- values$bridge_result$bridge
+            }
+          }, error = function(e) {
+            # 如果添加失败，继续使用基础数据框
+          })
+        }
+        
+        write.csv(bridge_df, file, row.names = FALSE)
+      } else {
+        # 如果没有桥接结果，创建空文件
+        empty_df <- data.frame(
+          Message = "桥接网络分析未运行或无结果",
+          stringsAsFactors = FALSE
+        )
+        write.csv(empty_df, file, row.names = FALSE)
+      }
+    }
+  )
+  
   output$download_network_plot <- downloadHandler(
     filename = function() {
       paste0("network_plot_", Sys.Date(), ".png")
@@ -3463,6 +4267,24 @@ server <- function(input, output, session) {
     return(!is.null(values$variables_confirmed) && values$variables_confirmed)
   })
   outputOptions(output, "variablesConfirmed", suspendWhenHidden = FALSE)
+  
+  # 检查是否有多个组别（用于显示桥接分析选项）
+  output$hasMultipleGroups <- reactive({
+    return(!is.null(values$variable_groups) && length(values$variable_groups) >= 2)
+  })
+  outputOptions(output, "hasMultipleGroups", suspendWhenHidden = FALSE)
+  
+  # 检查是否有桥接分析结果（用于显示桥接网络标签页）
+  output$hasBridgeAnalysis <- reactive({
+    return(!is.null(values$bridge_result) && !is.null(values$bridge_network))
+  })
+  outputOptions(output, "hasBridgeAnalysis", suspendWhenHidden = FALSE)
+  
+  # 检查是否有桥接比较结果
+  output$hasBridgeCompareResult <- reactive({
+    return(!is.null(values$bridge_compare_result))
+  })
+  outputOptions(output, "hasBridgeCompareResult", suspendWhenHidden = FALSE)
   
   # 重新选择变量
   observeEvent(input$reselect_variables, {
