@@ -515,7 +515,12 @@ ui <- dashboardPage(
               verbatimTextOutput("bridge_nodes_info"),
               br(),
               h5("📊 桥接中心性"),
-              verbatimTextOutput("bridge_centrality_info")
+              verbatimTextOutput("bridge_centrality_info"),
+              br(),
+              h5("📋 桥接中心性详表"),
+              DT::dataTableOutput("bridge_centrality_table"),
+              br(),
+              downloadButton("download_bridge_centrality", "下载桥接中心性数据", class = "btn-info")
             )
           )
         ),
@@ -761,21 +766,38 @@ ui <- dashboardPage(
             selectInput("bn_algorithm", "学习算法",
                        choices = list(
                          "Hill Climbing (推荐)" = "hc",
-                         "Tabu Search" = "tabu",
-                         "PC Algorithm" = "pc"
+                         "Tabu Search" = "tabu", 
+                         "PC Algorithm" = "pc",
+                         "IAMB" = "iamb",
+                         "IAMB-FDR (稀疏网络推荐)" = "iamb.fdr",
+                         "MMHC (混合方法)" = "mmhc",
+                         "RSMAX2 (连续变量)" = "rsmax2"
                        ), selected = "hc"),
             
             selectInput("score_function", "评分函数", 
                        choices = list(
                          "BGe (贝叶斯高斯)" = "bge",
-                         "BIC (贝叶斯信息准则)" = "bic"
+                         "BIC-G (高斯BIC)" = "bic-g",
+                         "AIC-G (高斯AIC)" = "aic-g",
+                         "对数似然-G (高斯)" = "loglik-g"
                        ), selected = "bge"),
             
             numericInput("bootstrap_rounds", "Bootstrap轮数",
-                        value = 1000, min = 500, max = 5000, step = 500),
+                        value = 1000, min = 500, max = 10000, step = 500),
             
             numericInput("strength_threshold", "边强度阈值", 
                         value = 0.85, min = 0.5, max = 1.0, step = 0.05),
+            
+            numericInput("direction_threshold", "方向阈值",
+                        value = 0.5, min = 0.3, max = 1.0, step = 0.05),
+            
+            checkboxInput("enable_cv", "启用交叉验证", TRUE),
+            
+            helpText("💡 算法选择建议："),
+            helpText("• 变量<10且边稀疏: IAMB-FDR"),
+            helpText("• 变量10-20: Hill Climbing"),
+            helpText("• 混合数据类型: MMHC"),
+            helpText("• 纯连续变量: RSMAX2"),
             
             br(),
             actionButton("run_bayesian", "🚀 运行贝叶斯分析", 
@@ -817,10 +839,60 @@ ui <- dashboardPage(
               condition = "output.bayesianComplete",
               tabsetPanel(
                 id = "bayesian_results",
-                tabPanel("网络结构", plotOutput("bayesian_network_plot", height = "600px")),
-                tabPanel("稳定性分析", plotOutput("bayesian_stability_plot", height = "600px")),
-                tabPanel("边强度表", DT::dataTableOutput("bayesian_edges_table")),
-                tabPanel("分析报告", uiOutput("bayesian_report"))
+                tabPanel("网络结构", 
+                  h5("🧠 学习的因果网络结构"),
+                  plotOutput("bayesian_network_plot", height = "500px"),
+                  hr(),
+                  h6("📊 网络统计"),
+                  verbatimTextOutput("bayesian_network_stats")
+                ),
+                tabPanel("Bootstrap稳定性", 
+                  h5("🔄 Bootstrap稳定性分析"),
+                  plotOutput("bayesian_stability_plot", height = "500px"),
+                  hr(),
+                  h6("📈 稳定性指标"),
+                  verbatimTextOutput("stability_metrics")
+                ),
+                tabPanel("平均网络",
+                  h5("📊 Bootstrap平均网络"),
+                  plotOutput("bayesian_averaged_plot", height = "500px"),
+                  hr(),
+                  h6("✨ 与GLASSO网络对比"),
+                  verbatimTextOutput("network_comparison")
+                ),
+                tabPanel("边强度表", 
+                  h5("📋 稳定边强度详表"),
+                  DT::dataTableOutput("bayesian_edges_table"),
+                  br(),
+                  downloadButton("download_bayesian_edges", "下载边强度数据", class = "btn-info")
+                ),
+                tabPanel("模型评估",
+                  h5("🎯 模型评估指标"),
+                  fluidRow(
+                    column(6,
+                      h6("📊 评分指标"),
+                      verbatimTextOutput("model_scores")
+                    ),
+                    column(6,
+                      h6("🔍 交叉验证"),
+                      plotOutput("cv_plot", height = "300px")
+                    )
+                  ),
+                  hr(),
+                  h6("📈 特征值分析"),
+                  plotOutput("eigenvalue_plot", height = "300px")
+                ),
+                tabPanel("参数拟合",
+                  h5("🔧 条件概率分布"),
+                  plotOutput("bn_fit_plot", height = "500px"),
+                  hr(),
+                  h6("📊 残差分析"),
+                  verbatimTextOutput("residual_analysis")
+                ),
+                tabPanel("分析报告", 
+                  h5("📄 完整分析报告"),
+                  uiOutput("bayesian_report")
+                )
               )
             )
           )
@@ -903,19 +975,35 @@ ui <- dashboardPage(
             
             conditionalPanel(
               condition = "output.analysisComplete",
-              h4("可下载文件："),
+              h4("📁 一键下载所有结果："),
+              downloadButton("download_all_results", "📦 下载完整结果包 (ZIP)", class = "btn-success btn-lg", style = "margin-bottom: 20px;"),
+              
+              hr(),
+              
+              h4("📊 单独下载文件："),
               br(),
-              downloadButton("download_network_plot", "下载网络图 (PNG)", class = "btn-primary"),
+              downloadButton("download_network_plot", "下载网络图 (PDF)", class = "btn-primary"),
               br(), br(),
               conditionalPanel(
                 condition = "output.hasBridgeAnalysis",
-                downloadButton("download_bridge_plot", "下载桥接网络图 (PNG)", class = "btn-primary"),
+                downloadButton("download_bridge_plot", "下载桥接网络图 (PDF)", class = "btn-primary"),
+                br(), br(),
+                downloadButton("download_bridge_centrality", "下载桥接中心性图 (PDF)", class = "btn-primary"),
                 br(), br(),
                 downloadButton("download_bridge_data", "下载桥接分析结果 (CSV)", class = "btn-info"),
                 br(), br()
               ),
-              downloadButton("download_centrality_plot", "下载中心性图 (PNG)", class = "btn-primary"),
+              downloadButton("download_centrality_plot", "下载中心性图 (PDF)", class = "btn-primary"),
               br(), br(),
+              conditionalPanel(
+                condition = "output.groupCompareComplete",
+                downloadButton("download_compare_plot", "下载网络比较图 (PDF)", class = "btn-primary"),
+                br(), br(),
+                downloadButton("download_compare_diff", "下载差异数据 (CSV)", class = "btn-info"),
+                br(), br(),
+                downloadButton("download_compare_pval", "下载P值数据 (CSV)", class = "btn-info"),
+                br(), br()
+              ),
               downloadButton("download_data", "下载分析数据 (CSV)", class = "btn-info"),
               br(), br(),
               downloadButton("download_code", "📝 下载分析代码 (R)", class = "btn-warning"),
@@ -1012,6 +1100,42 @@ ui <- dashboardPage(
 
 server <- function(input, output, session) {
   
+  # 自动保存结果的通用函数
+  auto_save_result <- function(result_type, result_object = NULL, plot_object = NULL, 
+                              data_frame = NULL, filename_prefix = "", width = 800, height = 600) {
+    if(is.null(values$output_folder)) return()
+    
+    timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+    
+    tryCatch({
+      # 保存图片
+      if(!is.null(plot_object)) {
+        plot_file <- file.path(values$output_folder, paste0(filename_prefix, "_", timestamp, ".png"))
+        png(plot_file, width = width, height = height, res = 150)
+        print(plot_object)
+        dev.off()
+        cat("已保存图片:", plot_file, "\n")
+      }
+      
+      # 保存数据框
+      if(!is.null(data_frame)) {
+        csv_file <- file.path(values$output_folder, paste0(filename_prefix, "_", timestamp, ".csv"))
+        write.csv(data_frame, csv_file, row.names = FALSE)
+        cat("已保存数据:", csv_file, "\n")
+      }
+      
+      # 保存RDS对象
+      if(!is.null(result_object)) {
+        rds_file <- file.path(values$output_folder, paste0(filename_prefix, "_", timestamp, ".rds"))
+        saveRDS(result_object, rds_file)
+        cat("已保存对象:", rds_file, "\n")
+      }
+      
+    }, error = function(e) {
+      cat("自动保存失败 (", result_type, "):", e$message, "\n")
+    })
+  }
+  
   # 反应性数据存储
   values <- reactiveValues(
     raw_data = NULL,
@@ -1026,7 +1150,16 @@ server <- function(input, output, session) {
     scale_config = NULL,
     available_scales = NULL,
     calculated_scales = NULL,
-    bayesian_result = NULL
+    bayesian_result = NULL,
+    # 桥接分析相关
+    bridge_result = NULL,
+    bridge_network = NULL,
+    bridge_groups = NULL,
+    group_compare_result = NULL,
+    bridge_compare_result = NULL,
+    # 文件输出相关
+    upload_timestamp = NULL,
+    output_folder = NULL
   )
   
   # 加载量表配置
@@ -1063,6 +1196,16 @@ server <- function(input, output, session) {
         
         if(values$validation_result$valid) {
           incProgress(0.5, detail = "处理数据类型...")
+          
+          # 设置上传时间戳并创建输出文件夹
+          values$upload_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+          values$output_folder <- file.path(getwd(), paste0("results_", values$upload_timestamp))
+          
+          # 创建输出文件夹
+          if(!dir.exists(values$output_folder)) {
+            dir.create(values$output_folder, recursive = TRUE)
+            cat("创建输出文件夹:", values$output_folder, "\n")
+          }
           
           # 使用处理后的数据（已自动转换数值类型）
           values$processed_data <- values$validation_result$processed_data
@@ -2209,9 +2352,42 @@ server <- function(input, output, session) {
         values$network_result <- safe_network_analysis(
           data = analysis_data_final,
           threshold = input$threshold %||% 0.05,
-          edge_labels = input$show_edge_labels %||% TRUE,
+          edge_labels = FALSE,  # 只显示连边，不显示权重
           colors = colors
         )
+        
+        # 使用get_network_plot函数保存网络分析结果
+        tryCatch({
+          if(requireNamespace("quickNet", quietly = TRUE)) {
+            timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+            prefix <- paste0("Fig1_network_", timestamp)
+            
+            # 切换到输出文件夹
+            if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
+              old_wd <- getwd()
+              setwd(values$output_folder)
+              on.exit(setwd(old_wd))
+            }
+            
+            # 调用get_network_plot保存图片
+            get_network_plot(values$network_result, 
+                           prefix = prefix, 
+                           width = 6, height = 4.5)
+            
+            # 保存PDF文件路径供网页显示使用
+            values$network_pdf_path <- file.path(values$output_folder, paste0(prefix, "_network_plot.pdf"))
+            
+            cat("已使用get_network_plot保存网络结果\n")
+            cat("PDF文件:", values$network_pdf_path, "\n")
+          }
+        }, error = function(e) {
+          cat("get_network_plot调用失败:", e$message, "\n")
+          # 备用保存方式
+          auto_save_result("network", 
+                          result_object = values$network_result,
+                          plot_object = values$network_result,
+                          filename_prefix = "Fig1_network_plot")
+        })
         
         incProgress(0.7, detail = "计算中心性指标...")
         
@@ -2219,6 +2395,39 @@ server <- function(input, output, session) {
         tryCatch({
           if(requireNamespace("quickNet", quietly = TRUE)) {
             values$centrality_result <- Centrality(values$network_result)
+            
+            # 使用get_centrality_plot函数保存中心性结果
+            tryCatch({
+              if(requireNamespace("quickNet", quietly = TRUE)) {
+                timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+                prefix <- paste0("Fig2_centrality_", timestamp)
+                
+                # 切换到输出文件夹
+                if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
+                  old_wd <- getwd()
+                  setwd(values$output_folder)
+                  on.exit(setwd(old_wd))
+                }
+                
+                # 调用get_centrality_plot保存图片
+                get_centrality_plot(values$centrality_result, 
+                                   prefix = prefix, 
+                                   width = 6, height = 4.5)
+                
+                # 保存PDF文件路径供网页显示使用
+                values$centrality_pdf_path <- file.path(values$output_folder, paste0(prefix, "_centrality_plot.pdf"))
+                
+                cat("已使用get_centrality_plot保存中心性结果\n")
+                cat("PDF文件:", values$centrality_pdf_path, "\n")
+              }
+            }, error = function(e) {
+              cat("get_centrality_plot调用失败:", e$message, "\n")
+              # 备用保存方式
+              auto_save_result("centrality", 
+                              result_object = values$centrality_result,
+                              plot_object = get_centrality_plot(values$centrality_result),
+                              filename_prefix = "Fig2_centrality_plot")
+            })
           } else {
             showNotification("quickNet包不可用，跳过中心性计算", type = "warning")
             values$centrality_result <- NULL
@@ -2313,13 +2522,8 @@ server <- function(input, output, session) {
                   cat("桥接分析 - 分组结构:", str(bridge_groups), "\n")
                   cat("桥接分析 - 变量名称:", colnames(analysis_data_final), "\n")
                   cat("桥接分析 - values$variable_groups:", str(values$variable_groups), "\n")
-                  # 首先构建用于桥接分析的网络（与主网络相同参数）
-                  bridge_network_base <- safe_network_analysis(
-                    data = analysis_data_final,
-                    threshold = input$threshold %||% 0.05,
-                    edge_labels = input$show_edge_labels %||% TRUE,
-                    colors = colors
-                  )
+                  # 使用主网络结果进行桥接分析（避免重复计算）
+                  bridge_network_base <- values$network_result
                   
                   # Bridge分析 - 使用验证过的communities
                   values$bridge_result <- Bridge(bridge_network_base, communities = bridge_groups)
@@ -2329,33 +2533,153 @@ server <- function(input, output, session) {
                   values$bridge_groups <- bridgeGroup(values$bridge_result, bridge_groups, 
                                                      labels = NULL, n = bridge_n, by_group = TRUE)
                   
-                  # 调试输出：检查bridgeGroup返回值
+                  # 调试输出：检查Bridge和bridgeGroup返回值
+                  cat("====== 桥接分析调试信息 ======\n")
+                  cat("Bridge分析结果:\n")
+                  if(!is.null(values$bridge_result)) {
+                    cat("- Bridge result存在，类型:", class(values$bridge_result), "\n")
+                    if(is.list(values$bridge_result)) {
+                      cat("- Bridge result元素:", names(values$bridge_result), "\n")
+                      if(!is.null(values$bridge_result$bridge_data)) {
+                        cat("- bridge_data中心性长度:", length(values$bridge_result$bridge_data), "\n")
+                        cat("- bridge_data中心性范围:", range(values$bridge_result$bridge_data, na.rm = TRUE), "\n")
+                      } else {
+                        cat("- bridge_data中心性为NULL\n")
+                      }
+                    }
+                  } else {
+                    cat("- Bridge result为NULL\n")
+                  }
+                  
                   cat("bridgeGroup返回值类型:", class(values$bridge_groups), "\n")
                   cat("bridgeGroup返回值长度:", length(values$bridge_groups), "\n")
-                  cat("bridgeGroup返回值内容:", str(values$bridge_groups), "\n")
-                  if(is.vector(values$bridge_groups)) {
+                  if(is.vector(values$bridge_groups) && !is.null(names(values$bridge_groups))) {
+                    cat("bridgeGroup返回值结构（向量）:\n")
+                    print(head(values$bridge_groups, 10))
                     cat("唯一值:", unique(values$bridge_groups), "\n")
+                  } else if(is.list(values$bridge_groups)) {
+                    cat("bridgeGroup返回值结构（列表）:\n")
+                    print(str(values$bridge_groups))
+                  }
+                  cat("===============================\n")
+                  
+                  # 创建英文组名映射
+                  group_name_mapping <- list()
+                  if(!is.null(values$scales) && !is.null(values$scales$summary)) {
+                    for(scale_name in names(values$scales$summary)) {
+                      scale_info <- values$scales$summary[[scale_name]]
+                      if(!is.null(scale_info$config) && !is.null(scale_info$config$name_en)) {
+                        # 使用英文名称的缩写
+                        if(scale_name == "AUDIT") {
+                          group_name_mapping[[scale_name]] <- "AUDIT"
+                        } else if(scale_name == "HRF") {
+                          group_name_mapping[["Habit"]] <- "Habit"
+                          group_name_mapping[["Reward"]] <- "Reward"
+                          group_name_mapping[["Fear"]] <- "Fear"
+                        } else {
+                          group_name_mapping[[scale_name]] <- scale_name
+                        }
+                      }
+                    }
+                  }
+                  
+                  # 创建英文版的bridge_groups用于显示
+                  bridge_groups_en <- values$bridge_groups
+                  if(is.vector(bridge_groups_en) && !is.null(names(bridge_groups_en))) {
+                    # 如果是命名向量，替换名称
+                    group_levels <- unique(bridge_groups_en)
+                    for(i in seq_along(group_levels)) {
+                      original_name <- group_levels[i]
+                      if(!is.null(group_name_mapping[[original_name]])) {
+                        bridge_groups_en[bridge_groups_en == original_name] <- group_name_mapping[[original_name]]
+                      }
+                    }
                   }
                   
                   # 创建桥接节点的形状信息
-                  shape_list <- ifelse(values$bridge_groups == "Bridge", "square", "circle")
+                  shape_list <- ifelse(bridge_groups_en == "Bridge", "square", "circle")
                   
                   # 为桥接网络设计配色方案
                   bridge_colors <- c("#63bbd0", "#f87599", "#fed71a", "#d1c2d3")  # 参考提供的代码
-                  unique_groups <- unique(values$bridge_groups)
+                  unique_groups <- unique(bridge_groups_en)
                   bridge_color_map <- bridge_colors[1:length(unique_groups)]
                   names(bridge_color_map) <- unique_groups
                   
-                  # 生成桥接网络图（突出显示桥接节点）
-                  values$bridge_network <- safe_network_analysis(
-                    data = analysis_data_final,
-                  threshold = input$threshold %||% 0.05,
-                  edge_labels = input$show_edge_labels %||% TRUE,
-                  colors = bridge_color_map[values$bridge_groups],
-                  groups = values$bridge_groups,
-                  shape = shape_list,
-                  title = "Bridge Network Analysis"
-                )
+                  # 生成桥接网络图（使用quickNet，突出显示桥接节点）
+                  values$bridge_network <- quickNet(
+                    analysis_data_final,
+                    title = "Bridge Network Analysis", 
+                    groups = bridge_groups_en,  # 使用英文组名
+                    shape = shape_list,
+                    threshold = input$threshold %||% 0.05,
+                    edge.labels = input$show_edge_labels %||% TRUE,
+                    posCol = c("#2376b7", "#134857"),  # 正边颜色
+                    negCol = c("#d2568c", "#62102e"),  # 负边颜色
+                    color = bridge_colors[1:length(unique(bridge_groups_en))],  # 节点颜色
+                    legend = TRUE, 
+                    legend.cex = 0.4,
+                    vsize = 6, 
+                    esize = 5, 
+                    asize = 5, 
+                    edge.label.cex = 1
+                  )
+                
+                # 生成桥接网络图PDF（使用get_network_plot）
+                if(!is.null(values$bridge_network)) {
+                  tryCatch({
+                    if(requireNamespace("quickNet", quietly = TRUE)) {
+                      timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+                      prefix_network <- paste0("Figure3B_bridge_network_", timestamp)
+                      
+                      # 设置工作目录到输出文件夹
+                      if(!is.null(values$output_folder)) {
+                        old_wd <- setwd(values$output_folder)
+                        on.exit(setwd(old_wd))
+                      }
+                      
+                      # 调用get_network_plot生成桥接网络图PDF
+                      get_network_plot(values$bridge_network, 
+                                     prefix = prefix_network, 
+                                     width = 6, height = 4.5)
+                      
+                      # 保存桥接网络图PDF路径
+                      values$bridge_network_pdf_path <- file.path(values$output_folder, paste0(prefix_network, "_network_plot.pdf"))
+                      cat("桥接网络图PDF:", values$bridge_network_pdf_path, "\n")
+                    }
+                  }, error = function(e) {
+                    cat("桥接网络图生成失败:", e$message, "\n")
+                  })
+                }
+                
+                # 生成桥接中心性图PDF和CSV（使用get_bridge_plot）
+                if(!is.null(values$bridge_result)) {
+                  tryCatch({
+                    if(requireNamespace("quickNet", quietly = TRUE)) {
+                      timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+                      prefix_centrality <- paste0("Figure3C_bridge_centrality_", timestamp)
+                      
+                      # 设置工作目录到输出文件夹
+                      if(!is.null(values$output_folder)) {
+                        old_wd <- setwd(values$output_folder)
+                        on.exit(setwd(old_wd))
+                      }
+                      
+                      # 调用get_bridge_plot生成桥接中心性PDF图和CSV数据
+                      get_bridge_plot(values$bridge_result, 
+                                     prefix = prefix_centrality, 
+                                     width = 6, height = 4.5)
+                      
+                      # 保存桥接中心性文件路径
+                      values$bridge_pdf_path <- file.path(values$output_folder, paste0(prefix_centrality, "_bridge_plot.pdf"))
+                      values$bridge_csv_path <- file.path(values$output_folder, paste0(prefix_centrality, "_bridge_table.csv"))
+                      
+                      cat("桥接中心性PDF:", values$bridge_pdf_path, "\n")
+                      cat("桥接中心性CSV:", values$bridge_csv_path, "\n")
+                    }
+                  }, error = function(e) {
+                    cat("get_bridge_plot调用失败:", e$message, "\n")
+                  })
+                }
                 
                 showNotification("桥接网络分析完成！", type = "message")
                 }
@@ -2422,6 +2746,8 @@ server <- function(input, output, session) {
       return(NULL)
     }
     
+    # 显示PDF文件生成位置信息（如果存在），但仍显示网络图
+    
     # 确保plot正确显示
     tryCatch({
       # 检查对象是否具有plot方法
@@ -2453,6 +2779,8 @@ server <- function(input, output, session) {
       text(0.5, 0.5, "桥接网络结果为空", cex = 1.2, col = "red")
       return(NULL)
     }
+    
+    # 显示PDF文件生成位置信息（如果存在），但仍显示桥接网络图
     
     # 绘制桥接网络图
     tryCatch({
@@ -2532,16 +2860,50 @@ server <- function(input, output, session) {
       }
       
       # 提取桥接中心性信息
-      if(is.list(values$bridge_result) && !is.null(values$bridge_result$bridge)) {
-        bridge_centrality <- values$bridge_result$bridge
-        variable_names <- names(values$bridge_groups)
+      if(is.list(values$bridge_result) && !is.null(values$bridge_result$bridge_data)) {
+        bridge_centrality <- values$bridge_result$bridge_data
         
-        # 找到桥接节点
-        bridge_nodes <- variable_names[values$bridge_groups == "Bridge"]
+        # 尝试多种方式获取桥接节点
+        bridge_nodes <- c()
+        bridge_indices <- c()
         
-        if(length(bridge_nodes) > 0 && length(bridge_centrality) >= length(variable_names)) {
-          # 提取桥接节点的中心性值
-          bridge_indices <- which(values$bridge_groups == "Bridge")
+        if(is.vector(values$bridge_groups) && !is.null(names(values$bridge_groups))) {
+          # 情况1：命名向量，查找"Bridge"标记的节点
+          if("Bridge" %in% values$bridge_groups) {
+            bridge_nodes <- names(values$bridge_groups)[values$bridge_groups == "Bridge"]
+            bridge_indices <- which(values$bridge_groups == "Bridge")
+          }
+        } else if(is.list(values$bridge_groups)) {
+          # 情况2：列表格式
+          if(!is.null(values$bridge_groups$Bridge)) {
+            bridge_nodes <- values$bridge_groups$Bridge
+            if(is.character(bridge_nodes)) {
+              # 如果是变量名，找到对应的索引
+              all_vars <- colnames(values$analysis_data)
+              bridge_indices <- which(all_vars %in% bridge_nodes)
+            }
+          }
+        }
+        
+        # 如果上面的方法都没找到，尝试从桥接中心性最高的节点中推断
+        if(length(bridge_nodes) == 0 && length(bridge_centrality) > 0) {
+          # 取桥接中心性最高的几个节点
+          top_indices <- order(bridge_centrality, decreasing = TRUE)[1:min(3, length(bridge_centrality))]
+          bridge_centrality_threshold <- quantile(bridge_centrality, 0.8, na.rm = TRUE)
+          bridge_indices <- which(bridge_centrality >= bridge_centrality_threshold)
+          
+          if(length(bridge_indices) > 0) {
+            all_vars <- colnames(values$analysis_data)
+            if(length(all_vars) >= max(bridge_indices)) {
+              bridge_nodes <- all_vars[bridge_indices]
+            }
+          }
+        }
+        
+        # 如果找到了桥接节点，计算并显示桥接中心性
+        if(length(bridge_nodes) > 0 && length(bridge_indices) > 0 && 
+           length(bridge_centrality) >= max(bridge_indices)) {
+          
           bridge_cent_values <- bridge_centrality[bridge_indices]
           
           # 排序显示
@@ -2555,7 +2917,7 @@ server <- function(input, output, session) {
             
             result <- paste0(
               "🌉 桥接中心性排名\n",
-              "=" * 20, "\n\n"
+              strrep("=", 20), "\n\n"
             )
             
             for(i in 1:nrow(bridge_ranking)) {
@@ -2584,6 +2946,169 @@ server <- function(input, output, session) {
     })
   })
   
+  # 桥接中心性数据表格 - 读取get_bridge_plot生成的CSV文件
+  output$bridge_centrality_table <- DT::renderDataTable({
+    # 依赖分析按钮确保更新
+    input$run_analysis
+    
+    tryCatch({
+      cat("=== 桥接中心性表格调试 ===\n")
+      
+      # 首先检查是否有CSV文件路径
+      if(!is.null(values$bridge_csv_path) && file.exists(values$bridge_csv_path)) {
+        cat("读取get_bridge_plot生成的CSV文件:", values$bridge_csv_path, "\n")
+        
+        # 读取CSV文件
+        bridge_table <- read.csv(values$bridge_csv_path, stringsAsFactors = FALSE)
+        cat("成功读取CSV文件，行数:", nrow(bridge_table), "，列数:", ncol(bridge_table), "\n")
+        cat("列名:", colnames(bridge_table), "\n")
+        
+        # 添加序号列
+        bridge_table$序号 <- 1:nrow(bridge_table)
+        
+        # 重新排列列的顺序
+        if("序号" %in% colnames(bridge_table)) {
+          bridge_table <- bridge_table[, c("序号", setdiff(colnames(bridge_table), "序号"))]
+        }
+        
+        cat("返回桥接中心性表格，行数:", nrow(bridge_table), "\n")
+        return(bridge_table)
+      }
+      
+      # 如果没有CSV文件，检查bridge_result
+      if(is.null(values$bridge_result)) {
+        cat("桥接分析未运行\n")
+        return(data.frame(状态 = "桥接分析未运行", 
+                         提示 = "请在网络分析页面启用桥接分析"))
+      }
+      
+      cat("bridge_result存在，元素:", names(values$bridge_result), "\n")
+      
+      # 检查是否有bridge_data
+      if(is.null(values$bridge_result$bridge_data)) {
+        cat("bridge_data为NULL，等待get_bridge_plot生成结果\n")
+        return(data.frame(状态 = "正在生成桥接中心性数据", 
+                         提示 = "请稍等，桥接分析正在生成结果文件"))
+      }
+      
+      # 备用方案：直接从bridge_result读取数据
+      bridge_centrality <- values$bridge_result$bridge_data
+      cat("从bridge_result读取数据，长度:", length(bridge_centrality), "\n")
+      
+      # 获取变量名
+      all_vars <- NULL
+      if(!is.null(values$analysis_data)) {
+        all_vars <- colnames(values$analysis_data)
+      } else {
+        all_vars <- paste0("Var", 1:length(bridge_centrality))
+      }
+      
+      # 创建数据框
+      bridge_table <- data.frame(
+        序号 = 1:length(bridge_centrality),
+        变量名 = all_vars[1:length(bridge_centrality)],
+        桥接中心性 = round(as.numeric(bridge_centrality), 6),
+        排名 = rank(-bridge_centrality, ties.method = "min"),
+        stringsAsFactors = FALSE
+      )
+      
+      # 按桥接中心性降序排列
+      bridge_table <- bridge_table[order(-bridge_table$桥接中心性), ]
+      bridge_table$序号 <- 1:nrow(bridge_table)
+      
+      cat("备用方案生成表格，行数:", nrow(bridge_table), "\n")
+      return(bridge_table)
+      
+    }, error = function(e) {
+      cat("桥接中心性表格生成错误:", e$message, "\n")
+      return(data.frame(错误类型 = "表格生成失败", 
+                       错误信息 = e$message,
+                       建议 = "请检查桥接分析是否正常完成"))
+    })
+  }, options = list(
+    pageLength = 15,
+    scrollX = TRUE,
+    order = list(list(2, 'desc')),
+    columnDefs = list(
+      list(targets = c(2), render = DT::JS("function(data, type, row) { return parseFloat(data).toFixed(6); }"))
+    ),
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel')
+  ))
+  
+  # 桥接中心性数据下载
+  output$download_bridge_centrality <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("bridge_centrality_", timestamp, ".csv")
+    },
+    content = function(file) {
+      tryCatch({
+        # 获取桥接中心性数据
+        if(!is.null(values$bridge_result) && !is.null(values$bridge_result$bridge)) {
+          bridge_centrality <- values$bridge_result$bridge
+          
+          if(!is.null(values$analysis_data)) {
+            all_vars <- colnames(values$analysis_data)
+          } else {
+            all_vars <- paste0("V", 1:length(bridge_centrality))
+          }
+          
+          # 确保长度匹配
+          if(length(all_vars) > length(bridge_centrality)) {
+            all_vars <- all_vars[1:length(bridge_centrality)]
+          } else if(length(all_vars) < length(bridge_centrality)) {
+            additional_vars <- paste0("V", (length(all_vars)+1):length(bridge_centrality))
+            all_vars <- c(all_vars, additional_vars)
+          }
+          
+          bridge_table <- data.frame(
+            Variable = all_vars,
+            BridgeCentrality = bridge_centrality,
+            Rank = rank(-bridge_centrality, ties.method = "min"),
+            stringsAsFactors = FALSE
+          )
+          
+          # 添加分组信息
+          if(!is.null(values$bridge_groups)) {
+            tryCatch({
+              if(is.vector(values$bridge_groups) && !is.null(names(values$bridge_groups))) {
+                bridge_table$Group <- values$bridge_groups[bridge_table$Variable]
+                bridge_table$Group[is.na(bridge_table$Group)] <- "Ungrouped"
+              } else {
+                bridge_table$Group <- "Ungrouped"
+              }
+            }, error = function(e) {
+              bridge_table$Group <- "Ungrouped"
+            })
+          } else {
+            bridge_table$Group <- "Ungrouped"
+          }
+          
+          # 按桥接中心性降序排列
+          bridge_table <- bridge_table[order(-bridge_table$BridgeCentrality), ]
+          
+          # 保存到指定文件夹
+          if(!is.null(values$output_folder)) {
+            output_file <- file.path(values$output_folder, basename(file))
+            write.csv(bridge_table, output_file, row.names = FALSE)
+            cat("桥接中心性数据已保存到:", output_file, "\n")
+          }
+          
+          # 同时保存到下载文件
+          write.csv(bridge_table, file, row.names = FALSE)
+        } else {
+          # 空数据情况
+          empty_data <- data.frame(Message = "桥接中心性数据不可用")
+          write.csv(empty_data, file, row.names = FALSE)
+        }
+      }, error = function(e) {
+        error_data <- data.frame(Error = paste("导出失败:", e$message))
+        write.csv(error_data, file, row.names = FALSE)
+      })
+    }
+  )
+  
   # 中心性图输出
   output$centrality_plot <- renderPlot({
     req(values$centrality_result)
@@ -2594,6 +3119,8 @@ server <- function(input, output, session) {
       text(0.5, 0.5, "中心性结果为空", cex = 1.2, col = "red")
       return(NULL)
     }
+    
+    # 显示PDF文件生成位置信息（如果存在），但仍显示中心性图
     
     tryCatch({
       get_centrality_plot(values$centrality_result)
@@ -2651,6 +3178,92 @@ server <- function(input, output, session) {
             bootstrap_n = input$stability_bootstrap
           )
           
+          # 使用get_stability_plot生成稳定性分析辅助图表（对应主图Fig1-Fig2）
+          tryCatch({
+            timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+            
+            # 设置工作目录到输出文件夹
+            if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
+              old_wd <- getwd()
+              setwd(values$output_folder)
+              on.exit(setwd(old_wd))
+            }
+            
+            # 使用quickNet包进行完整的稳定性分析（对应主网络分析Fig1-Fig2）
+            if(requireNamespace("quickNet", quietly = TRUE)) {
+              
+              # S1: 网络稳定性分析（对应Fig1主网络图的稳定性）
+              if(!is.null(values$analysis_data)) {
+                sta_result <- Stability(values$analysis_data)
+                values$stability_complete <- sta_result
+                
+                # 使用get_stability_plot生成专业的稳定性图表
+                s1_prefix <- paste0("S1_network_stability_", timestamp)
+                get_stability_plot(sta_result, prefix = s1_prefix, width = 8, height = 6)
+                
+                values$network_stability_pdf <- paste0(s1_prefix, "_stability_plot.pdf")
+                values$network_stability_csv <- paste0(s1_prefix, "_stability_data.csv")
+                cat("S1网络稳定性图表已生成:", values$network_stability_pdf, "\n")
+              }
+              
+              # S2: 中心性稳定性分析（对应Fig2中心性图的稳定性）
+              if(!is.null(values$centrality_stability)) {
+                s2_prefix <- paste0("S2_centrality_stability_", timestamp)
+                
+                # 生成中心性稳定性图
+                pdf(paste0(s2_prefix, "_centrality_stability.pdf"), width = 8, height = 6)
+                plot(values$centrality_stability, statistics = c("strength", "closeness", "betweenness"))
+                dev.off()
+                
+                values$centrality_stability_pdf <- paste0(s2_prefix, "_centrality_stability.pdf")
+                cat("S2中心性稳定性图表已生成:", values$centrality_stability_pdf, "\n")
+                
+                # S2相关的CS系数分析
+                cs_pdf_file <- paste0(s2_prefix, "_cs_coefficient.pdf")
+                pdf(cs_pdf_file, width = 8, height = 6)
+                plot(values$centrality_stability, "strength")
+                dev.off()
+                
+                values$cs_coefficient_pdf <- cs_pdf_file
+                
+                # 保存CS系数数据
+                cs_data_file <- paste0(s2_prefix, "_cs_coefficient.csv")
+                tryCatch({
+                  cs_stats <- corStability(values$centrality_stability)
+                  cs_df <- data.frame(
+                    Statistic = names(cs_stats),
+                    CS_Coefficient = as.numeric(cs_stats),
+                    Interpretation = ifelse(as.numeric(cs_stats) > 0.5, "稳定 (>0.5)", 
+                                          ifelse(as.numeric(cs_stats) > 0.25, "可接受 (0.25-0.5)", "不稳定 (<0.25)"))
+                  )
+                  write.csv(cs_df, cs_data_file, row.names = FALSE)
+                  cat("S2 CS系数数据已保存:", cs_data_file, "\n")
+                }, error = function(e) {
+                  cat("保存CS系数数据失败:", e$message, "\n")
+                })
+              }
+              
+              # S3: 边稳定性分析（对应主网络边的稳定性，如果有的话）
+              if(!is.null(values$edge_stability)) {
+                s3_prefix <- paste0("S3_edge_stability_", timestamp)
+                s3_pdf_file <- paste0(s3_prefix, "_edge_stability.pdf")
+                
+                pdf(s3_pdf_file, width = 8, height = 6)
+                plot(values$edge_stability, labels = FALSE, order = "sample")
+                dev.off()
+                
+                values$edge_stability_pdf <- s3_pdf_file
+                cat("S3边稳定性图表已生成:", values$edge_stability_pdf, "\n")
+              }
+              
+            } else {
+              showNotification("需要quickNet包进行稳定性分析", type = "warning")
+            }
+            
+          }, error = function(e) {
+            cat("生成稳定性SFig失败:", e$message, "\n")
+          })
+          
           incProgress(1, detail = "稳定性分析完成!")
           showNotification("稳定性分析完成！", type = "message")
           
@@ -2683,22 +3296,48 @@ server <- function(input, output, session) {
   output$stability_summary <- renderText({
     req(values$stability_result)
     
-    result <- paste0("稳定性分析摘要\n",
-                    "================\n\n",
+    result <- paste0("稳定性分析摘要（辅助材料）\n",
+                    "========================\n\n",
                     "Bootstrap次数: ", values$stability_result$bootstrap_n, "\n\n")
     
-    if(!is.null(values$stability_result$edge_stability)) {
-      result <- paste0(result, "✓ 边稳定性分析已完成\n")
+    # S1: 网络稳定性（对应Fig1主网络）
+    if(!is.null(values$network_stability_pdf)) {
+      result <- paste0(result, "✓ S1: 网络稳定性分析已完成\n")
+      result <- paste0(result, "  📊 ", basename(values$network_stability_pdf), " (对应Fig1网络图)\n")
+      if(!is.null(values$network_stability_csv)) {
+        result <- paste0(result, "  📄 ", basename(values$network_stability_csv), "\n")
+      }
     }
     
+    # S2: 中心性稳定性（对应Fig2中心性图）
     if(!is.null(values$stability_result$centrality_stability)) {
-      result <- paste0(result, "✓ 中心性稳定性分析已完成\n")
+      result <- paste0(result, "\n✓ S2: 中心性稳定性分析已完成\n")
+      if(!is.null(values$centrality_stability_pdf)) {
+        result <- paste0(result, "  📊 ", basename(values$centrality_stability_pdf), " (对应Fig2中心性图)\n")
+      }
+      if(!is.null(values$cs_coefficient_pdf)) {
+        result <- paste0(result, "  📊 ", basename(values$cs_coefficient_pdf), " (CS系数)\n")
+      }
     }
     
-    result <- paste0(result, "\n建议:\n",
+    # S3: 边稳定性（对应主网络边）
+    if(!is.null(values$stability_result$edge_stability)) {
+      result <- paste0(result, "\n✓ S3: 边稳定性分析已完成\n")
+      if(!is.null(values$edge_stability_pdf)) {
+        result <- paste0(result, "  📊 ", basename(values$edge_stability_pdf), " (网络边稳定性)\n")
+      }
+    }
+    
+    result <- paste0(result, "\n📁 文件组织说明:\n",
+                    "   S1-S3: 对应Fig1-Fig3主图的稳定性分析\n",
+                    "   网页显示实时图表，PDF用于论文发表\n",
+                    "   所有辅助材料保存到results文件夹\n")
+    
+    result <- paste0(result, "\n📖 解读建议:\n",
                     "- 边的置信区间较窄表示边稳定\n",
                     "- 中心性指标的稳定性应大于0.25\n",
-                    "- CS系数应大于0.5表示稳定")
+                    "- CS系数应大于0.5表示稳定\n",
+                    "- S编号与Fig主图编号对应")
     
     return(result)
   })
@@ -3031,6 +3670,54 @@ server <- function(input, output, session) {
             p_adjust_method = input$p_adjust_method
           )
           
+          # 使用get_compare_plot生成网络比较的PDF图和CSV数据
+          tryCatch({
+            if(requireNamespace("quickNet", quietly = TRUE)) {
+              timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+              prefix <- paste0("Fig4_NetworkDiff_", group1_name, "_minus_", group2_name, "_", timestamp)
+              
+              # 切换到输出文件夹
+              if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
+                old_wd <- getwd()
+                setwd(values$output_folder)
+                on.exit(setwd(old_wd))
+              }
+              
+              # 需要为get_compare_plot提供网络对象，使用主网络分析结果
+              network_obj <- values$network_result
+              
+              # 调用get_compare_plot生成PDF图和CSV数据
+              get_compare_plot(compare_result, network_obj, 
+                             prefix = prefix, 
+                             width = 6, height = 4.5)
+              
+              # 保存PDF和CSV文件路径
+              values$compare_pdf_path <- file.path(values$output_folder, paste0(prefix, "_compare_plot.pdf"))
+              values$compare_diff_csv_path <- file.path(values$output_folder, paste0(prefix, "_diff_sig.csv"))
+              values$compare_pval_csv_path <- file.path(values$output_folder, paste0(prefix, "_edge_weight_p.csv"))
+              
+              # 手动生成CSV数据文件（按照tutorial.R的模式）
+              if(!is.null(compare_result$diff_sig)) {
+                write.csv(data.frame(compare_result$diff_sig), 
+                         values$compare_diff_csv_path, 
+                         row.names = TRUE)
+                cat("已保存差异显著性CSV:", values$compare_diff_csv_path, "\n")
+              }
+              
+              if(!is.null(compare_result$edge_weight_p)) {
+                write.csv(data.frame(compare_result$edge_weight_p), 
+                         values$compare_pval_csv_path, 
+                         row.names = TRUE)
+                cat("已保存P值矩阵CSV:", values$compare_pval_csv_path, "\n")
+              }
+              
+              cat("已使用get_compare_plot生成网络比较结果\n")
+              cat("PDF文件:", values$compare_pdf_path, "\n")
+            }
+          }, error = function(e) {
+            cat("get_compare_plot调用失败:", e$message, "\n")
+          })
+          
           # 桥接网络比较分析（如果启用）
           if(!is.null(input$enable_bridge_compare) && input$enable_bridge_compare && 
              !is.null(values$bridge_result) && !is.null(values$bridge_groups)) {
@@ -3130,6 +3817,9 @@ server <- function(input, output, session) {
   output$group_compare_plot <- renderPlot({
     req(values$group_compare_result)
     
+    # 显示PDF文件生成位置信息（如果存在），但仍显示比较图
+    
+    # 如果没有PDF文件，则直接显示比较图（与get_compare_plot相同参数）
     tryCatch({
       if(requireNamespace("quickNet", quietly = TRUE)) {
         get_compare_plot(values$group_compare_result$compare_result, values$network_result)
@@ -3577,25 +4267,58 @@ server <- function(input, output, session) {
   # 桥接网络图下载
   output$download_bridge_plot <- downloadHandler(
     filename = function() {
-      paste0("bridge_network_plot_", Sys.Date(), ".png")
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("bridge_network_plot_", timestamp, ".pdf")
     },
     content = function(file) {
-      if(!is.null(values$bridge_network)) {
-        png(file, width = 800, height = 600, res = 100)
-        tryCatch({
-          print(values$bridge_network)
-        }, error = function(e) {
-          plot.new()
-          text(0.5, 0.5, paste("无法生成桥接网络图:", e$message), cex = 1, col = "red")
-        })
-        dev.off()
-      } else {
-        # 如果没有桥接网络结果，创建空白图片
-        png(file, width = 800, height = 600, res = 100)
-        plot.new()
-        text(0.5, 0.5, "桥接网络分析未运行", cex = 1.5, col = "gray")
-        dev.off()
-      }
+      tryCatch({
+        # 优先使用get_network_plot生成的桥接网络PDF文件
+        if(!is.null(values$bridge_network_pdf_path) && file.exists(values$bridge_network_pdf_path)) {
+          file.copy(values$bridge_network_pdf_path, file, overwrite = TRUE)
+          cat("复制桥接网络PDF文件:", values$bridge_network_pdf_path, "->", file, "\n")
+        } else {
+          # 备用方案：重新生成PDF
+          pdf(file, width = 6, height = 4.5)
+          if(!is.null(values$bridge_network)) {
+            plot(values$bridge_network)
+          } else {
+            plot.new()
+            text(0.5, 0.5, "桥接网络结果不可用", cex = 1.5, col = "red")
+          }
+          dev.off()
+        }
+      }, error = function(e) {
+        cat("保存桥接网络图失败:", e$message, "\n")
+      })
+    }
+  )
+  
+  # 桥接中心性图下载
+  output$download_bridge_centrality <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("bridge_centrality_plot_", timestamp, ".pdf")
+    },
+    content = function(file) {
+      tryCatch({
+        # 优先使用get_bridge_plot生成的桥接中心性PDF文件
+        if(!is.null(values$bridge_pdf_path) && file.exists(values$bridge_pdf_path)) {
+          file.copy(values$bridge_pdf_path, file, overwrite = TRUE)
+          cat("复制桥接中心性PDF文件:", values$bridge_pdf_path, "->", file, "\n")
+        } else {
+          # 备用方案：重新生成PDF
+          pdf(file, width = 6, height = 4.5)
+          if(!is.null(values$bridge_result)) {
+            get_bridge_plot(values$bridge_result)
+          } else {
+            plot.new()
+            text(0.5, 0.5, "桥接中心性结果不可用", cex = 1.5, col = "red")
+          }
+          dev.off()
+        }
+      }, error = function(e) {
+        cat("保存桥接中心性图失败:", e$message, "\n")
+      })
     }
   )
   
@@ -3638,25 +4361,144 @@ server <- function(input, output, session) {
     }
   )
   
-  output$download_network_plot <- downloadHandler(
+  # 网络比较图下载
+  output$download_compare_plot <- downloadHandler(
     filename = function() {
-      paste0("network_plot_", Sys.Date(), ".png")
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("network_compare_plot_", timestamp, ".pdf")
     },
     content = function(file) {
-      png(file, width = 800, height = 600, res = 100)
-      print(values$network_result)
-      dev.off()
+      tryCatch({
+        # 优先使用get_compare_plot生成的PDF文件
+        if(!is.null(values$compare_pdf_path) && file.exists(values$compare_pdf_path)) {
+          file.copy(values$compare_pdf_path, file, overwrite = TRUE)
+          cat("复制网络比较PDF文件:", values$compare_pdf_path, "->", file, "\n")
+        } else {
+          # 备用方案：重新生成PDF
+          pdf(file, width = 6, height = 4.5)
+          if(!is.null(values$group_compare_result)) {
+            get_compare_plot(values$group_compare_result$compare_result, values$network_result)
+          } else {
+            plot.new()
+            text(0.5, 0.5, "网络比较结果不可用", cex = 1.5, col = "red")
+          }
+          dev.off()
+        }
+      }, error = function(e) {
+        cat("保存网络比较图失败:", e$message, "\n")
+      })
+    }
+  )
+  
+  # 网络比较差异数据下载
+  output$download_compare_diff <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("network_compare_diff_", timestamp, ".csv")
+    },
+    content = function(file) {
+      tryCatch({
+        # 优先使用已生成的CSV文件
+        if(!is.null(values$compare_diff_csv_path) && file.exists(values$compare_diff_csv_path)) {
+          file.copy(values$compare_diff_csv_path, file, overwrite = TRUE)
+          cat("复制差异数据CSV文件:", values$compare_diff_csv_path, "->", file, "\n")
+        } else if(!is.null(values$group_compare_result$compare_result$diff_sig)) {
+          # 备用方案：重新生成CSV
+          write.csv(data.frame(values$group_compare_result$compare_result$diff_sig), 
+                   file, row.names = TRUE)
+          cat("重新生成差异数据CSV文件:", file, "\n")
+        } else {
+          # 如果没有数据，创建说明文件
+          write("没有找到网络比较差异数据。请确保已运行网络比较分析。", file)
+        }
+      }, error = function(e) {
+        cat("保存网络比较差异数据失败:", e$message, "\n")
+        write(paste("保存差异数据时出错:", e$message), file)
+      })
+    }
+  )
+  
+  # 网络比较P值数据下载
+  output$download_compare_pval <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("network_compare_pval_", timestamp, ".csv")
+    },
+    content = function(file) {
+      tryCatch({
+        # 优先使用已生成的CSV文件
+        if(!is.null(values$compare_pval_csv_path) && file.exists(values$compare_pval_csv_path)) {
+          file.copy(values$compare_pval_csv_path, file, overwrite = TRUE)
+          cat("复制P值数据CSV文件:", values$compare_pval_csv_path, "->", file, "\n")
+        } else if(!is.null(values$group_compare_result$compare_result$edge_weight_p)) {
+          # 备用方案：重新生成CSV
+          write.csv(data.frame(values$group_compare_result$compare_result$edge_weight_p), 
+                   file, row.names = TRUE)
+          cat("重新生成P值数据CSV文件:", file, "\n")
+        } else {
+          # 如果没有数据，创建说明文件
+          write("没有找到网络比较P值数据。请确保已运行网络比较分析。", file)
+        }
+      }, error = function(e) {
+        cat("保存网络比较P值数据失败:", e$message, "\n")
+        write(paste("保存P值数据时出错:", e$message), file)
+      })
+    }
+  )
+  
+  output$download_network_plot <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("network_plot_", timestamp, ".pdf")
+    },
+    content = function(file) {
+      tryCatch({
+        # 优先使用get_network_plot生成的PDF文件
+        if(!is.null(values$network_pdf_path) && file.exists(values$network_pdf_path)) {
+          file.copy(values$network_pdf_path, file, overwrite = TRUE)
+          cat("复制网络PDF文件:", values$network_pdf_path, "->", file, "\n")
+        } else {
+          # 备用方案：重新生成PDF
+          pdf(file, width = 6, height = 4.5)
+          if(!is.null(values$network_result)) {
+            plot(values$network_result)
+          } else {
+            plot.new()
+            text(0.5, 0.5, "网络结果不可用", cex = 1.5, col = "red")
+          }
+          dev.off()
+        }
+      }, error = function(e) {
+        cat("保存网络图失败:", e$message, "\n")
+      })
     }
   )
   
   output$download_centrality_plot <- downloadHandler(
     filename = function() {
-      paste0("centrality_plot_", Sys.Date(), ".png")
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("centrality_plot_", timestamp, ".pdf")
     },
     content = function(file) {
-      png(file, width = 800, height = 600, res = 100)
-      print(get_centrality_plot(values$centrality_result))
-      dev.off()
+      tryCatch({
+        # 优先使用get_centrality_plot生成的PDF文件
+        if(!is.null(values$centrality_pdf_path) && file.exists(values$centrality_pdf_path)) {
+          file.copy(values$centrality_pdf_path, file, overwrite = TRUE)
+          cat("复制中心性PDF文件:", values$centrality_pdf_path, "->", file, "\n")
+        } else {
+          # 备用方案：重新生成PDF
+          pdf(file, width = 6, height = 4.5)
+          if(!is.null(values$centrality_result)) {
+            plot(get_centrality_plot(values$centrality_result))
+          } else {
+            plot.new()
+            text(0.5, 0.5, "中心性结果不可用", cex = 1.5, col = "red")
+          }
+          dev.off()
+        }
+      }, error = function(e) {
+        cat("保存中心性图失败:", e$message, "\n")
+      })
     }
   )
   
@@ -3678,6 +4520,59 @@ server <- function(input, output, session) {
       # 生成完整的分析代码
       analysis_code <- generate_analysis_code(values)
       writeLines(analysis_code, file, useBytes = TRUE)
+    }
+  )
+  
+  # 下载所有结果文件（ZIP压缩包）
+  output$download_all_results <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("network_analysis_results_", timestamp, ".zip")
+    },
+    content = function(file) {
+      tryCatch({
+        if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
+          # 获取输出文件夹中的所有文件
+          files_to_zip <- list.files(values$output_folder, full.names = TRUE, recursive = TRUE)
+          
+          if(length(files_to_zip) > 0) {
+            # 创建临时目录用于打包
+            temp_dir <- tempdir()
+            zip_dir <- file.path(temp_dir, "network_analysis_results")
+            dir.create(zip_dir, showWarnings = FALSE, recursive = TRUE)
+            
+            # 复制所有文件到临时目录，保持原有结构
+            for(src_file in files_to_zip) {
+              rel_path <- gsub(paste0("^", values$output_folder, "/"), "", src_file)
+              dest_file <- file.path(zip_dir, rel_path)
+              dest_dir <- dirname(dest_file)
+              dir.create(dest_dir, showWarnings = FALSE, recursive = TRUE)
+              file.copy(src_file, dest_file, overwrite = TRUE)
+            }
+            
+            # 创建ZIP文件
+            old_wd <- getwd()
+            setwd(temp_dir)
+            zip(file, "network_analysis_results", flags = "-r")
+            setwd(old_wd)
+            
+            cat("已创建结果压缩包:", file, "\n")
+            cat("包含文件数:", length(files_to_zip), "\n")
+          } else {
+            # 如果没有文件，创建一个说明文件
+            write("没有找到分析结果文件。请确保已运行网络分析。", file)
+            cat("警告：没有找到结果文件\n")
+          }
+        } else {
+          # 如果输出文件夹不存在，创建一个说明文件
+          write("输出文件夹不存在。请先运行网络分析生成结果。", file)
+          cat("警告：输出文件夹不存在\n")
+        }
+      }, error = function(e) {
+        cat("创建结果压缩包失败:", e$message, "\n")
+        # 创建错误说明文件
+        write(paste("创建压缩包时出错:", e$message), file)
+      })
     }
   )
   
@@ -3724,6 +4619,84 @@ server <- function(input, output, session) {
       )
       
       write.csv(example_data, file, row.names = FALSE)
+    }
+  )
+  
+  # 稳定性分析下载处理器
+  output$download_stability <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("stability_report_", timestamp, ".zip")
+    },
+    content = function(file) {
+      tryCatch({
+        # 创建临时目录
+        temp_dir <- tempdir()
+        zip_dir <- file.path(temp_dir, "stability_analysis")
+        dir.create(zip_dir, showWarnings = FALSE, recursive = TRUE)
+        
+        files_to_include <- c()
+        
+        # 边稳定性PDF
+        if(!is.null(values$edge_stability_pdf) && file.exists(values$edge_stability_pdf)) {
+          dest_file <- file.path(zip_dir, basename(values$edge_stability_pdf))
+          file.copy(values$edge_stability_pdf, dest_file, overwrite = TRUE)
+          files_to_include <- c(files_to_include, dest_file)
+        }
+        
+        # 中心性稳定性PDF
+        if(!is.null(values$centrality_stability_pdf) && file.exists(values$centrality_stability_pdf)) {
+          dest_file <- file.path(zip_dir, basename(values$centrality_stability_pdf))
+          file.copy(values$centrality_stability_pdf, dest_file, overwrite = TRUE)
+          files_to_include <- c(files_to_include, dest_file)
+        }
+        
+        # CS系数PDF
+        if(!is.null(values$cs_coefficient_pdf) && file.exists(values$cs_coefficient_pdf)) {
+          dest_file <- file.path(zip_dir, basename(values$cs_coefficient_pdf))
+          file.copy(values$cs_coefficient_pdf, dest_file, overwrite = TRUE)
+          files_to_include <- c(files_to_include, dest_file)
+        }
+        
+        if(length(files_to_include) > 0) {
+          # 创建ZIP文件
+          old_wd <- getwd()
+          setwd(temp_dir)
+          zip(file, "stability_analysis", flags = "-r")
+          setwd(old_wd)
+          cat("已创建稳定性分析压缩包:", file, "\n")
+        } else {
+          write("没有找到稳定性分析结果文件。请先运行稳定性分析。", file)
+        }
+        
+      }, error = function(e) {
+        cat("创建稳定性分析压缩包失败:", e$message, "\n")
+        write(paste("创建压缩包时出错:", e$message), file)
+      })
+    }
+  )
+  
+  # 贝叶斯网络稳定性下载处理器
+  output$download_bn_stability <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("bayesian_stability_", timestamp, ".pdf")
+    },
+    content = function(file) {
+      tryCatch({
+        # 如果贝叶斯网络有稳定性分析结果，使用那个PDF
+        if(!is.null(values$bayesian_stability_pdf) && file.exists(values$bayesian_stability_pdf)) {
+          file.copy(values$bayesian_stability_pdf, file, overwrite = TRUE)
+        } else {
+          # 否则创建一个说明文件
+          pdf(file, width = 8, height = 6)
+          plot.new()
+          text(0.5, 0.5, "贝叶斯网络稳定性分析\n尚未运行或未生成结果", cex = 1.5, col = "gray")
+          dev.off()
+        }
+      }, error = function(e) {
+        cat("保存贝叶斯稳定性图失败:", e$message, "\n")
+      })
     }
   )
   
@@ -4795,11 +5768,139 @@ server <- function(input, output, session) {
           score = input$score_function,
           bootstrap_n = input$bootstrap_rounds,
           threshold = input$strength_threshold,
+          direction_threshold = input$direction_threshold,
           blacklist = constraints$blacklist,
           whitelist = constraints$whitelist
         )
         
+        # 自动保存贝叶斯网络分析结果
+        if(!is.null(values$bayesian_result)) {
+          # 创建边强度数据框
+          if(!is.null(values$bayesian_result$stable_edges)) {
+            edges_df <- values$bayesian_result$stable_edges
+            edges_df <- edges_df[order(-edges_df$strength), ]
+            
+            # 保存贝叶斯分析结果
+            auto_save_result("bayesian", 
+                            result_object = values$bayesian_result,
+                            data_frame = edges_df,
+                            filename_prefix = "Fig4_bayesian_network")
+          }
+        }
+        
         incProgress(0.8, detail = "完成分析...")
+        
+        # 生成贝叶斯网络主图：Figure5a结构图和Figure5b平均网络图
+        tryCatch({
+          timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+          
+          # 设置工作目录到输出文件夹
+          if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
+            old_wd <- getwd()
+            setwd(values$output_folder)
+            on.exit(setwd(old_wd))
+            
+            # 获取分组和颜色信息
+            groups <- if(!is.null(values$variable_groups)) values$variable_groups else NULL
+            colors <- if(!is.null(groups)) {
+              unique_groups <- unique(groups)
+              VIZ_CONFIG$colors$primary[1:length(unique_groups)]
+            } else NULL
+            
+            # Figure5a: 贝叶斯网络结构图（无权重的学习图结构）
+            figure5a_file <- paste0("Figure5a_bayesian_structure_", timestamp, ".pdf")
+            pdf(figure5a_file, width = 8, height = 6)
+            tryCatch({
+              if(!is.null(values$bayesian_result) && !is.null(values$bayesian_result$learned_network)) {
+                create_bayesian_network_plot(
+                  bayesian_result = values$bayesian_result,
+                  colors = colors,
+                  groups = groups,
+                  title = "Bayesian Network Structure",
+                  network_type = "structure"  # 仅显示结构，无权重
+                )
+              }
+            }, error = function(e) {
+              plot.new()
+              text(0.5, 0.5, paste("贝叶斯结构图生成失败:", e$message), cex = 1.2, col = "red")
+            })
+            dev.off()
+            values$bayesian_structure_pdf <- figure5a_file
+            
+            # Figure5b: 贝叶斯平均网络图（带颜色强度值的版本）
+            figure5b_file <- paste0("Figure5b_bayesian_averaged_", timestamp, ".pdf")
+            pdf(figure5b_file, width = 8, height = 6)
+            tryCatch({
+              if(!is.null(values$bayesian_result) && !is.null(values$bayesian_result$averaged_network)) {
+                create_bayesian_network_plot(
+                  bayesian_result = values$bayesian_result,
+                  colors = colors,
+                  groups = groups,
+                  title = "Averaged Bayesian Network",
+                  network_type = "averaged"  # 显示平均网络，带权重强度
+                )
+              }
+            }, error = function(e) {
+              plot.new()
+              text(0.5, 0.5, paste("贝叶斯平均图生成失败:", e$message), cex = 1.2, col = "red")
+            })
+            dev.off()
+            values$bayesian_averaged_pdf <- figure5b_file
+            
+            # Figure5a对应的CSV: 贝叶斯网络结构数据
+            figure5a_csv <- paste0("Figure5a_bayesian_structure_", timestamp, ".csv")
+            if(!is.null(values$bayesian_result$learned_network)) {
+              structure_data <- data.frame(
+                From = character(0),
+                To = character(0),
+                stringsAsFactors = FALSE
+              )
+              
+              # 提取有向边信息
+              if(!is.null(values$bayesian_result$learned_network$arcs) && nrow(values$bayesian_result$learned_network$arcs) > 0) {
+                structure_data <- data.frame(
+                  From = values$bayesian_result$learned_network$arcs[, "from"],
+                  To = values$bayesian_result$learned_network$arcs[, "to"],
+                  stringsAsFactors = FALSE
+                )
+              }
+              write.csv(structure_data, figure5a_csv, row.names = FALSE)
+              values$bayesian_structure_csv <- file.path(values$output_folder, figure5a_csv)
+            }
+            
+            # Figure5b对应的CSV: 贝叶斯网络强度数据
+            figure5b_csv <- paste0("Figure5b_bayesian_averaged_", timestamp, ".csv")
+            if(!is.null(values$bayesian_result$averaged_network)) {
+              strength_data <- values$bayesian_result$averaged_network
+              write.csv(strength_data, figure5b_csv, row.names = TRUE)
+              values$bayesian_averaged_csv <- file.path(values$output_folder, figure5b_csv)
+            }
+            
+            # 额外的评估指标CSV（补充材料）
+            sfig_metrics_file <- paste0("SFig_bayesian_metrics_", timestamp, ".csv")
+            metrics_df <- data.frame(
+              Metric = c("Network Score", "BIC Score", "Log-likelihood", "Mean CV Loss", "SD CV Loss"),
+              Value = c(
+                values$bayesian_result$network_score,
+                values$bayesian_result$bic_score,
+                values$bayesian_result$loglik_score,
+                values$bayesian_result$mean_cv_loss,
+                values$bayesian_result$sd_cv_loss
+              ),
+              stringsAsFactors = FALSE
+            )
+            write.csv(metrics_df, sfig_metrics_file, row.names = FALSE)
+            
+            # 保存主要文件路径（保持兼容性）
+            values$bayesian_pdf_path <- file.path(values$output_folder, figure5a_file)  # 主要使用结构图PDF
+            values$bayesian_metrics_csv_path <- file.path(values$output_folder, sfig_metrics_file)
+            
+            cat("贝叶斯网络PDF:", values$bayesian_pdf_path, "\n")
+            cat("贝叶斯评估指标CSV:", values$bayesian_metrics_csv_path, "\n")
+          }
+        }, error = function(e) {
+          cat("贝叶斯网络PDF/CSV生成失败:", e$message, "\n")
+        })
         
         bayesian_completed(TRUE)
         showNotification("贝叶斯网络分析完成！", type = "message")
@@ -4811,35 +5912,357 @@ server <- function(input, output, session) {
     })
   })
   
-  # 贝叶斯网络图输出
+  # 贝叶斯网络图输出 - 使用继承样式的可视化
   output$bayesian_network_plot <- renderPlot({
     req(values$bayesian_result)
     
     tryCatch({
-      # 使用bnlearn的绘图功能
-      if(requireNamespace("bnlearn", quietly = TRUE) && requireNamespace("Rgraphviz", quietly = TRUE)) {
-        bnlearn::graphviz.plot(values$bayesian_result$averaged_network)
+      # 获取网络分析的可视化配置（如果存在）
+      colors <- if(!is.null(values$colors)) values$colors else NULL
+      groups <- if(!is.null(values$variable_groups)) values$variable_groups else NULL
+      layout <- if(!is.null(values$network_result) && !is.null(values$network_result$layout)) {
+        values$network_result$layout
       } else {
-        # 备用方案：使用igraph
-        if(requireNamespace("igraph", quietly = TRUE)) {
-          # 转换为igraph格式并绘图
-          edges <- values$bayesian_result$stable_edges
-          if(nrow(edges) > 0) {
-            g <- igraph::graph_from_data_frame(edges[, c("from", "to")], directed = TRUE)
-            igraph::plot(g, vertex.size = 20, vertex.label.cex = 0.8,
+        "spring"
+      }
+      
+      # 使用新的贝叶斯网络可视化函数
+      bayesian_plot <- create_bayesian_network_plot(
+        bayesian_result = values$bayesian_result,
+        colors = colors,
+        groups = groups,
+        layout = layout,
+        title = "学习的贝叶斯网络结构"
+      )
+      
+      if(!is.null(bayesian_plot)) {
+        plot(bayesian_plot)
+      } else {
+        # 备用方案：使用bnlearn的默认可视化
+        if(requireNamespace("bnlearn", quietly = TRUE) && requireNamespace("Rgraphviz", quietly = TRUE)) {
+          bnlearn::graphviz.plot(values$bayesian_result$learned_network)
+        } else {
+          # 最基础的备用方案：使用igraph
+          if(requireNamespace("igraph", quietly = TRUE)) {
+            edges <- values$bayesian_result$stable_edges
+            if(!is.null(edges) && nrow(edges) > 0) {
+              g <- igraph::graph_from_data_frame(edges[, c("from", "to")], directed = TRUE)
+              igraph::plot(g, vertex.size = 20, vertex.label.cex = 0.8,
                         edge.arrow.size = 0.5, layout = igraph::layout_with_fr)
+            } else {
+              plot.new()
+              text(0.5, 0.5, "未发现稳定的边连接", cex = 1.5)
+            }
           } else {
             plot.new()
-            text(0.5, 0.5, "未发现稳定的边连接", cex = 1.5)
+            text(0.5, 0.5, "需要安装Rgraphviz或igraph包进行可视化", cex = 1.2)
           }
-        } else {
-          plot.new()
-          text(0.5, 0.5, "需要安装Rgraphviz或igraph包进行可视化", cex = 1.2)
         }
       }
     }, error = function(e) {
       plot.new()
       text(0.5, 0.5, paste("绘图失败:", e$message), cex = 1.2)
+    })
+  })
+  
+  # 贝叶斯网络统计信息输出
+  output$bayesian_network_stats <- renderText({
+    req(values$bayesian_result)
+    
+    params <- values$bayesian_result$parameters
+    
+    paste0(
+      "📊 网络结构统计\n",
+      "====================\n",
+      "算法: ", params$algorithm, "\n",
+      "评分函数: ", params$score, "\n",
+      "样本量: ", params$sample_size, "\n",
+      "变量数: ", params$variable_count, "\n",
+      "边数量: ", params$edge_count, "\n",
+      "稳定边数: ", params$stable_edge_count, " (阈值≥", params$threshold, ")\n",
+      "边密度: ", sprintf("%.2f%%", params$edge_density * 100), "\n",
+      "Bootstrap轮数: ", params$bootstrap_n
+    )
+  })
+  
+  # 模型评分指标输出
+  output$model_scores <- renderText({
+    req(values$bayesian_result)
+    
+    paste0(
+      "🎯 模型评估指标\n",
+      "==================\n",
+      "网络评分 (", values$bayesian_result$parameters$score, "): ", 
+      sprintf("%.2f", values$bayesian_result$network_score), "\n",
+      "BIC: ", sprintf("%.2f", values$bayesian_result$bic_score), "\n",
+      "Log-likelihood: ", sprintf("%.2f", values$bayesian_result$loglik_score), "\n\n",
+      "📊 交叉验证 (10-fold)\n",
+      "平均损失: ", sprintf("%.4f", values$bayesian_result$mean_cv_loss), "\n",
+      "标准差: ", sprintf("%.4f", values$bayesian_result$sd_cv_loss), "\n\n",
+      "💡 解释：\n",
+      "• BIC越小越好 (拟合与复杂性的平衡)\n",
+      "• Log-likelihood越大越好 (拟合质量)\n",
+      "• CV损失越小越好 (泛化能力)"
+    )
+  })
+  
+  # 稳定性指标输出
+  output$stability_metrics <- renderText({
+    req(values$bayesian_result)
+    
+    boot_result <- values$bayesian_result$bootstrap_result
+    stable_edges <- values$bayesian_result$stable_edges
+    params <- values$bayesian_result$parameters
+    
+    # 计算稳定性统计
+    high_strength_edges <- nrow(boot_result[boot_result$strength >= 0.9, ])
+    medium_strength_edges <- nrow(boot_result[boot_result$strength >= 0.7 & boot_result$strength < 0.9, ])
+    low_strength_edges <- nrow(boot_result[boot_result$strength >= 0.5 & boot_result$strength < 0.7, ])
+    
+    high_direction_edges <- nrow(boot_result[boot_result$direction >= 0.8, ])
+    
+    paste0(
+      "🔄 Bootstrap稳定性分析\n",
+      "========================\n",
+      "Bootstrap轮数: ", params$bootstrap_n, "\n",
+      "强度阈值: ", params$threshold, "\n",
+      "方向阈值: ", params$direction_threshold, "\n\n",
+      "📊 边强度分布：\n",
+      "• 高强度 (≥0.9): ", high_strength_edges, " 条\n",
+      "• 中强度 (0.7-0.9): ", medium_strength_edges, " 条\n",
+      "• 低强度 (0.5-0.7): ", low_strength_edges, " 条\n\n",
+      "📈 方向稳定性：\n",
+      "• 高方向性 (≥0.8): ", high_direction_edges, " 条\n\n",
+      "✅ 稳定边 (同时满足强度和方向阈值)：\n",
+      "• 总数: ", nrow(stable_edges), " 条\n",
+      "• 占比: ", sprintf("%.1f%%", nrow(stable_edges) / nrow(boot_result) * 100)
+    )
+  })
+  
+  # 交叉验证图输出
+  output$cv_plot <- renderPlot({
+    req(values$bayesian_result, values$bayesian_result$cv_loss)
+    
+    cv_loss <- values$bayesian_result$cv_loss
+    
+    if(length(cv_loss) > 0) {
+      par(mar = c(4, 4, 2, 1))
+      plot(cv_loss, type = "o", pch = 19, col = "#4A90E2",
+           main = "10-Fold 交叉验证损失",
+           xlab = "Fold", ylab = "Log-likelihood Loss",
+           ylim = c(min(cv_loss) * 0.95, max(cv_loss) * 1.05))
+      
+      # 添加平均线
+      abline(h = mean(cv_loss), col = "#D0021B", lty = 2, lwd = 2)
+      
+      # 添加标准差区间
+      mean_loss <- mean(cv_loss)
+      sd_loss <- sd(cv_loss)
+      abline(h = mean_loss + sd_loss, col = "#D0021B", lty = 3)
+      abline(h = mean_loss - sd_loss, col = "#D0021B", lty = 3)
+      
+      legend("topright", 
+             legend = c("CV Loss", "Mean", "±1 SD"),
+             col = c("#4A90E2", "#D0021B", "#D0021B"),
+             lty = c(1, 2, 3), pch = c(19, NA, NA),
+             cex = 0.8)
+    } else {
+      plot.new()
+      text(0.5, 0.5, "交叉验证结果不可用", cex = 1.2)
+    }
+  })
+  
+  # 特征值图输出
+  output$eigenvalue_plot <- renderPlot({
+    req(values$bayesian_result, values$bayesian_result$eigen_values)
+    
+    eigen_vals <- values$bayesian_result$eigen_values
+    
+    par(mar = c(4, 4, 2, 1))
+    plot(eigen_vals, type = "b", pch = 19, col = "#4A90E2",
+         main = "相关矩阵特征值分布",
+         xlab = "成分", ylab = "特征值",
+         ylim = c(0, max(eigen_vals) * 1.1))
+    
+    # 添加Kaiser准则线（特征值=1）
+    abline(h = 1, col = "#D0021B", lty = 2, lwd = 2)
+    
+    # 标注大于1的特征值数量
+    n_factors <- sum(eigen_vals > 1)
+    text(length(eigen_vals) * 0.7, max(eigen_vals) * 0.9,
+         paste("因子数 (特征值>1):", n_factors),
+         col = "#D0021B", cex = 1.1, font = 2)
+    
+    legend("topright", 
+           legend = c("特征值", "Kaiser准则"),
+           col = c("#4A90E2", "#D0021B"),
+           lty = c(1, 2), pch = c(19, NA),
+           cex = 0.8)
+  })
+  
+  # 平均网络图输出
+  output$bayesian_averaged_plot <- renderPlot({
+    req(values$bayesian_result, values$bayesian_result$averaged_network)
+    
+    tryCatch({
+      # 使用与主网络相同的样式绘制平均网络
+      colors <- if(!is.null(values$colors)) values$colors else NULL
+      groups <- if(!is.null(values$variable_groups)) values$variable_groups else NULL
+      layout <- if(!is.null(values$network_result) && !is.null(values$network_result$layout)) {
+        values$network_result$layout
+      } else {
+        "spring"
+      }
+      
+      averaged_plot <- create_bayesian_network_plot(
+        bayesian_result = values$bayesian_result,
+        colors = colors,
+        groups = groups,
+        layout = layout,
+        title = "Bootstrap平均网络 (稳定边)"
+      )
+      
+      if(!is.null(averaged_plot)) {
+        plot(averaged_plot)
+      } else {
+        plot.new()
+        text(0.5, 0.5, "平均网络可视化失败", cex = 1.2, col = "red")
+      }
+      
+    }, error = function(e) {
+      plot.new()
+      text(0.5, 0.5, paste("平均网络绘制失败:", e$message), cex = 1, col = "red")
+    })
+  })
+  
+  # 网络比较输出
+  output$network_comparison <- renderText({
+    req(values$bayesian_result)
+    
+    # 如果有GLASSO网络结果，进行比较
+    if(!is.null(values$network_result)) {
+      paste0(
+        "🔍 贝叶斯网络 vs GLASSO网络\n",
+        "==============================\n",
+        "贝叶斯网络边数: ", values$bayesian_result$parameters$edge_count, "\n",
+        "GLASSO网络边数: ", "需要从network_result提取", "\n\n",
+        "💡 主要差异：\n",
+        "• 贝叶斯网络：有向边，表示因果关系\n",
+        "• GLASSO网络：无向边，表示偏相关\n",
+        "• 贝叶斯稳定边更保守，关注因果方向\n",
+        "• GLASSO关注条件独立性"
+      )
+    } else {
+      paste0(
+        "🔍 网络比较\n",
+        "============\n",
+        "需要先完成GLASSO网络分析才能进行比较。\n\n",
+        "💡 分析建议：\n",
+        "1. 先进行网络分析 (GLASSO)\n",
+        "2. 再进行贝叶斯分析\n",
+        "3. 比较两种方法的发现"
+      )
+    }
+  })
+  
+  # 参数拟合图输出 
+  output$bn_fit_plot <- renderPlot({
+    req(values$bayesian_result, values$bayesian_result$fitted_network)
+    
+    tryCatch({
+      if(requireNamespace("bnlearn", quietly = TRUE)) {
+        # 创建条件概率分布的可视化
+        fitted_net <- values$bayesian_result$fitted_network
+        
+        # 选择一个有足够边的节点进行展示
+        variable_names <- names(values$bayesian_result$data)
+        
+        if(length(variable_names) > 0) {
+          # 使用第一个变量作为示例
+          target_var <- variable_names[1]
+          
+          # 创建直方图显示拟合结果
+          par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+          
+          # 显示前4个变量的分布
+          for(i in 1:min(4, length(variable_names))) {
+            var_name <- variable_names[i]
+            var_data <- values$bayesian_result$data[[var_name]]
+            
+            hist(var_data, 
+                 main = paste("分布:", var_name),
+                 xlab = var_name,
+                 ylab = "频数",
+                 col = "#4A90E2",
+                 border = "white")
+            
+            # 添加正态拟合曲线
+            if(is.numeric(var_data)) {
+              x_seq <- seq(min(var_data), max(var_data), length.out = 100)
+              normal_curve <- dnorm(x_seq, mean(var_data), sd(var_data)) * length(var_data) * diff(range(var_data)) / 30
+              lines(x_seq, normal_curve, col = "#D0021B", lwd = 2)
+            }
+          }
+          
+          par(mfrow = c(1, 1))
+        } else {
+          plot.new()
+          text(0.5, 0.5, "参数拟合结果不可用", cex = 1.2)
+        }
+      } else {
+        plot.new()
+        text(0.5, 0.5, "需要bnlearn包进行参数可视化", cex = 1.2)
+      }
+      
+    }, error = function(e) {
+      plot.new()
+      text(0.5, 0.5, paste("参数拟合可视化失败:", e$message), cex = 1, col = "red")
+    })
+  })
+  
+  # 残差分析输出
+  output$residual_analysis <- renderText({
+    req(values$bayesian_result)
+    
+    tryCatch({
+      if(!is.null(values$bayesian_result$fitted_network)) {
+        fitted_net <- values$bayesian_result$fitted_network
+        data <- values$bayesian_result$data
+        
+        # 计算基本的拟合统计
+        n_params <- sum(sapply(fitted_net, function(x) length(x$coefficients)))
+        n_obs <- nrow(data)
+        n_vars <- ncol(data)
+        
+        # 计算模型复杂度
+        complexity <- n_params / (n_obs * n_vars)
+        
+        paste0(
+          "🔧 参数拟合诊断\n",
+          "==================\n",
+          "观测数: ", n_obs, "\n",
+          "变量数: ", n_vars, "\n", 
+          "参数数: ", n_params, "\n",
+          "模型复杂度: ", sprintf("%.3f", complexity), "\n\n",
+          "💡 拟合质量评估：\n",
+          if(complexity < 0.1) {
+            "• 模型复杂度适中，拟合良好"
+          } else if(complexity < 0.2) {
+            "• 模型较复杂，可能存在过拟合风险"
+          } else {
+            "• 模型过于复杂，建议简化网络结构"
+          }, "\n\n",
+          "📊 建议：\n",
+          "• 参数估计基于高斯假设\n",
+          "• 适用于连续型心理量表数据\n", 
+          "• 可用于预测和干预分析"
+        )
+      } else {
+        "参数拟合结果不可用"
+      }
+      
+    }, error = function(e) {
+      paste("残差分析失败:", e$message)
     })
   })
   
@@ -4902,26 +6325,108 @@ server <- function(input, output, session) {
   # 下载处理器
   output$download_bn_plot <- downloadHandler(
     filename = function() {
-      paste0("bayesian_network_", Sys.Date(), ".png")
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("bayesian_network_", timestamp, ".pdf")
     },
     content = function(file) {
-      png(file, width = 1200, height = 800, res = 150)
-      if(requireNamespace("bnlearn", quietly = TRUE) && requireNamespace("Rgraphviz", quietly = TRUE)) {
-        bnlearn::graphviz.plot(values$bayesian_result$averaged_network)
-      } else {
-        plot.new()
-        text(0.5, 0.5, "需要安装Rgraphviz包", cex = 2)
-      }
-      dev.off()
+      tryCatch({
+        # 优先使用生成的PDF文件
+        if(!is.null(values$bayesian_pdf_path) && file.exists(values$bayesian_pdf_path)) {
+          file.copy(values$bayesian_pdf_path, file, overwrite = TRUE)
+          cat("复制贝叶斯网络PDF文件:", values$bayesian_pdf_path, "->", file, "\n")
+        } else {
+          # 备用方案：重新生成PDF
+          pdf(file, width = 8, height = 6)
+          tryCatch({
+            if(!is.null(values$bayesian_result)) {
+              groups <- if(!is.null(values$variable_groups)) values$variable_groups else NULL
+              colors <- if(!is.null(groups)) {
+                unique_groups <- unique(groups)
+                if(exists("VIZ_CONFIG")) VIZ_CONFIG$colors$primary[1:length(unique_groups)] else NULL
+              } else NULL
+              create_bayesian_network_plot(
+                bayesian_result = values$bayesian_result,
+                colors = colors,
+                groups = groups,
+                title = "Bayesian Network Structure"
+              )
+            } else {
+              plot.new()
+              text(0.5, 0.5, "贝叶斯网络不可用", cex = 1.5, col = "red")
+            }
+          }, error = function(e) {
+            plot.new()
+            text(0.5, 0.5, paste("贝叶斯网络图生成失败:", e$message), cex = 1.2, col = "red")
+          })
+          dev.off()
+        }
+      }, error = function(e) {
+        cat("保存贝叶斯网络图失败:", e$message, "\n")
+      })
     }
   )
   
   output$download_bn_edges <- downloadHandler(
     filename = function() {
-      paste0("bayesian_edges_", Sys.Date(), ".csv")
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("bayesian_edges_", timestamp, ".csv")
     },
     content = function(file) {
-      write.csv(values$bayesian_result$stable_edges, file, row.names = FALSE)
+      tryCatch({
+        # 优先使用生成的CSV文件
+        if(!is.null(values$bayesian_edges_csv_path) && file.exists(values$bayesian_edges_csv_path)) {
+          file.copy(values$bayesian_edges_csv_path, file, overwrite = TRUE)
+          cat("复制贝叶斯边数据CSV文件:", values$bayesian_edges_csv_path, "->", file, "\n")
+        } else if(!is.null(values$bayesian_result$stable_edges)) {
+          # 备用方案：重新生成CSV
+          write.csv(values$bayesian_result$stable_edges, file, row.names = FALSE)
+          cat("重新生成贝叶斯边数据CSV文件:", file, "\n")
+        } else {
+          # 如果没有数据，创建说明文件
+          write("没有找到贝叶斯网络稳定边数据。请确保已运行贝叶斯网络分析。", file)
+        }
+      }, error = function(e) {
+        cat("保存贝叶斯边数据失败:", e$message, "\n")
+        write(paste("保存边数据时出错:", e$message), file)
+      })
+    }
+  )
+  
+  # 贝叶斯评估指标下载
+  output$download_bn_metrics <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("bayesian_metrics_", timestamp, ".csv")
+    },
+    content = function(file) {
+      tryCatch({
+        # 优先使用生成的CSV文件
+        if(!is.null(values$bayesian_metrics_csv_path) && file.exists(values$bayesian_metrics_csv_path)) {
+          file.copy(values$bayesian_metrics_csv_path, file, overwrite = TRUE)
+          cat("复制贝叶斯评估指标CSV文件:", values$bayesian_metrics_csv_path, "->", file, "\n")
+        } else if(!is.null(values$bayesian_result)) {
+          # 备用方案：重新生成CSV
+          metrics_df <- data.frame(
+            Metric = c("Network Score", "BIC Score", "Log-likelihood", "Mean CV Loss", "SD CV Loss"),
+            Value = c(
+              values$bayesian_result$network_score,
+              values$bayesian_result$bic_score,
+              values$bayesian_result$loglik_score,
+              values$bayesian_result$mean_cv_loss,
+              values$bayesian_result$sd_cv_loss
+            ),
+            stringsAsFactors = FALSE
+          )
+          write.csv(metrics_df, file, row.names = FALSE)
+          cat("重新生成贝叶斯评估指标CSV文件:", file, "\n")
+        } else {
+          # 如果没有数据，创建说明文件
+          write("没有找到贝叶斯网络评估指标。请确保已运行贝叶斯网络分析。", file)
+        }
+      }, error = function(e) {
+        cat("保存贝叶斯评估指标失败:", e$message, "\n")
+        write(paste("保存评估指标时出错:", e$message), file)
+      })
     }
   )
   

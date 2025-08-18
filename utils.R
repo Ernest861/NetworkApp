@@ -998,13 +998,14 @@ validate_constraints <- function(constraints, available_vars) {
 #' @return 贝叶斯网络分析结果
 conduct_likert_bayesian_analysis <- function(data, 
                                            algorithm = "hc",
-                                           score = "bge",
+                                           score = "bge",  # 默认使用BGe评分，适合连续数据
                                            bootstrap_n = 1000,
                                            threshold = 0.85,
+                                           direction_threshold = 0.5,
                                            blacklist = NULL,
                                            whitelist = NULL) {
   
-  # 检查bnlearn包
+  # 检查必要的包
   if(!requireNamespace("bnlearn", quietly = TRUE)) {
     stop("贝叶斯网络分析需要bnlearn包。请安装: install.packages('bnlearn')")
   }
@@ -1021,16 +1022,42 @@ conduct_likert_bayesian_analysis <- function(data,
   
   numeric_data <- na.omit(numeric_data)
   
-  if(nrow(numeric_data) < 30) {
+  # 检查数据类型并调整评分函数
+  # 心理量表数据通常是连续/序数数据，需要使用Gaussian评分函数
+  continuous_scores <- c("bge", "loglik-g", "aic-g", "bic-g")
+  discrete_scores <- c("bic", "aic", "loglik", "k2", "bdj")
+  
+  if(score %in% discrete_scores) {
+    cat("警告：检测到连续数据，将", score, "调整为适合连续数据的BGe评分\n")
+    score <- "bge"
+  }
+  n_vars <- ncol(numeric_data)
+  n_obs <- nrow(numeric_data)
+  
+  if(n_obs < 30) {
     stop("贝叶斯网络分析需要至少30个完整观测值")
   }
   
-  if(ncol(numeric_data) < 3) {
+  if(n_vars < 3) {
     stop("贝叶斯网络分析需要至少3个变量")
   }
   
+  # 数据质量诊断
+  cat("贝叶斯网络分析数据诊断:\n")
+  cat("样本量:", n_obs, "\n")
+  cat("变量数:", n_vars, "\n")
+  cat("理论最大边数:", (n_vars * (n_vars - 1) / 2), "\n")
+  
+  # 检查数据相关性
+  cor_matrix <- cor(numeric_data)
+  eigen_values <- eigen(cor_matrix)$values
+  cat("特征值(前5个):", head(eigen_values, 5), "\n")
+  
   # 准备算法参数
-  algo_args <- list(score = score)
+  algo_args <- list()
+  if(algorithm %in% c("hc", "tabu")) {
+    algo_args$score <- score
+  }
   if(!is.null(blacklist)) {
     algo_args$blacklist <- blacklist
   }
@@ -1038,54 +1065,286 @@ conduct_likert_bayesian_analysis <- function(data,
     algo_args$whitelist <- whitelist
   }
   
-  # 学习网络结构
+  # 学习网络结构 - 扩展算法选择
   tryCatch({
+    cat("使用", algorithm, "算法学习网络结构...\n")
+    
     if(algorithm == "hc") {
       learned_net <- bnlearn::hc(numeric_data, score = score, blacklist = blacklist, whitelist = whitelist)
     } else if(algorithm == "tabu") {
       learned_net <- bnlearn::tabu(numeric_data, score = score, blacklist = blacklist, whitelist = whitelist)
     } else if(algorithm == "pc") {
       learned_net <- bnlearn::pc.stable(numeric_data, blacklist = blacklist, whitelist = whitelist)
+    } else if(algorithm == "iamb") {
+      learned_net <- bnlearn::iamb(numeric_data, blacklist = blacklist, whitelist = whitelist)
+    } else if(algorithm == "iamb.fdr") {
+      learned_net <- bnlearn::iamb.fdr(numeric_data, blacklist = blacklist, whitelist = whitelist)
+    } else if(algorithm == "mmhc") {
+      learned_net <- bnlearn::mmhc(numeric_data, blacklist = blacklist, whitelist = whitelist)
+    } else if(algorithm == "rsmax2") {
+      learned_net <- bnlearn::rsmax2(numeric_data, blacklist = blacklist, whitelist = whitelist)
     } else {
       learned_net <- bnlearn::gs(numeric_data, blacklist = blacklist, whitelist = whitelist)
     }
     
+    cat("学习得到", nrow(learned_net$arcs), "条边\n")
+    
+    # 参数拟合 - 使用bn.fit估计条件概率分布
+    cat("进行参数估计...\n")
+    bn_fitted <- bnlearn::bn.fit(learned_net, numeric_data)
+    
+    # 计算模型指标 - 根据数据类型选择合适的评分函数
+    network_score <- bnlearn::score(learned_net, numeric_data, type = score)
+    
+    # 对于连续数据，使用BIC-G (Gaussian BIC)或其他适合的评分
+    tryCatch({
+      # 尝试计算BIC，如果失败则使用BGe评分
+      bic_score <- bnlearn::score(learned_net, numeric_data, type = "bic-g")
+    }, error = function(e) {
+      # 如果BIC-G也不可用，则使用BGe评分作为替代
+      bic_score <- bnlearn::score(learned_net, numeric_data, type = "bge")
+      cat("注意：使用BGe评分替代BIC（连续数据）\n")
+    })
+    
+    # 对数似然评分（适用于连续数据）
+    loglik_score <- bnlearn::score(learned_net, numeric_data, type = "loglik-g")
+    
+    cat("网络评分 -", score, ":", round(network_score, 2), "\n")
+    cat("BIC:", round(bic_score, 2), "\n")
+    cat("Log-likelihood:", round(loglik_score, 2), "\n")
+    
     # Bootstrap稳定性分析
+    cat("进行Bootstrap稳定性分析(", bootstrap_n, "轮)...\n")
     boot_result <- bnlearn::boot.strength(numeric_data,
                                          R = bootstrap_n,
                                          algorithm = algorithm,
-                                         algorithm.args = algo_args)
+                                         algorithm.args = algo_args,
+                                         debug = FALSE)
     
-    # 筛选稳定边
+    # 筛选稳定边 - 使用更严格的标准
     stable_edges <- boot_result[boot_result$strength >= threshold & 
-                               boot_result$direction >= 0.5, ]
+                               boot_result$direction >= direction_threshold, ]
+    
+    cat("稳定边数量:", nrow(stable_edges), "/", nrow(boot_result), "\n")
     
     # 创建平均网络
     avg_network <- bnlearn::averaged.network(boot_result, threshold = threshold)
     
-    # 网络评估
-    network_score <- bnlearn::score(learned_net, numeric_data, type = score)
+    # 交叉验证评估 - 使用适合连续数据的损失函数
+    cat("进行交叉验证...\n")
+    cv_result <- bnlearn::bn.cv(numeric_data, learned_net, loss = "logl-g", k = 10, debug = FALSE)
+    cv_loss <- sapply(cv_result, function(x) x$loss)
+    mean_cv_loss <- mean(cv_loss)
+    sd_cv_loss <- sd(cv_loss)
+    
+    cat("交叉验证损失:", round(mean_cv_loss, 4), "±", round(sd_cv_loss, 4), "\n")
+    
+    # 创建强度图数据（用于qgraph可视化）
+    strength_plot_data <- NULL
+    if(requireNamespace("bnlearn", quietly = TRUE)) {
+      tryCatch({
+        strength_plot_data <- bnlearn::strength.plot(avg_network, boot_result, shape = "ellipse", render = FALSE)
+      }, error = function(e) {
+        cat("强度图生成失败:", e$message, "\n")
+      })
+    }
     
     return(list(
+      # 网络结构
       learned_network = learned_net,
       averaged_network = avg_network,
+      fitted_network = bn_fitted,
+      
+      # Bootstrap结果
       bootstrap_result = boot_result,
       stable_edges = stable_edges,
+      strength_plot_data = strength_plot_data,
+      
+      # 模型评估指标
       network_score = network_score,
+      bic_score = bic_score,
+      loglik_score = loglik_score,
+      
+      # 交叉验证结果
+      cv_result = cv_result,
+      cv_loss = cv_loss,
+      mean_cv_loss = mean_cv_loss,
+      sd_cv_loss = sd_cv_loss,
+      
+      # 约束规则
       blacklist = blacklist,
       whitelist = whitelist,
+      
+      # 参数和诊断信息
       parameters = list(
         algorithm = algorithm,
         score = score,
         bootstrap_n = bootstrap_n,
         threshold = threshold,
-        sample_size = nrow(numeric_data),
-        variable_count = ncol(numeric_data)
-      )
+        direction_threshold = direction_threshold,
+        sample_size = n_obs,
+        variable_count = n_vars,
+        edge_count = nrow(learned_net$arcs),
+        stable_edge_count = nrow(stable_edges),
+        edge_density = nrow(learned_net$arcs) / (n_vars * (n_vars - 1) / 2)
+      ),
+      
+      # 原始数据和诊断
+      data = numeric_data,
+      correlation_matrix = cor_matrix,
+      eigen_values = eigen_values
     ))
     
   }, error = function(e) {
     stop(paste("贝叶斯网络分析失败:", e$message))
+  })
+}
+
+#' 创建继承网络分析样式的贝叶斯网络可视化
+#' @param bayesian_result 贝叶斯分析结果
+#' @param colors 颜色配置（继承自网络分析）
+#' @param groups 变量分组（继承自网络分析）
+#' @param layout 布局（继承自网络分析）
+#' @param title 图标题
+#' @return qgraph对象
+create_bayesian_network_plot <- function(bayesian_result, 
+                                        colors = NULL, 
+                                        groups = NULL, 
+                                        layout = NULL,
+                                        title = "贝叶斯网络结构",
+                                        network_type = "structure") {
+  
+  # 检查必要的包
+  if(!requireNamespace("qgraph", quietly = TRUE)) {
+    stop("需要qgraph包进行可视化")
+  }
+  
+  # 根据network_type选择不同的网络数据
+  if(network_type == "averaged" && !is.null(bayesian_result$averaged_network)) {
+    # Figure5b: 使用平均网络（带权重强度值）
+    network_to_plot <- bayesian_result$averaged_network
+    use_weights <- TRUE
+  } else {
+    # Figure5a: 使用学习网络结构（无权重）
+    network_to_plot <- bayesian_result$learned_network
+    use_weights <- FALSE
+  }
+  
+  # 获取变量名
+  variable_names <- names(bayesian_result$data)
+  n_vars <- length(variable_names)
+  
+  # 构建邻接矩阵
+  adj_matrix <- matrix(0, nrow = n_vars, ncol = n_vars)
+  rownames(adj_matrix) <- colnames(adj_matrix) <- variable_names
+  
+  if(use_weights && network_type == "averaged") {
+    # Figure5b: 平均网络，显示权重强度
+    if(is.matrix(network_to_plot) || is.data.frame(network_to_plot)) {
+      # 如果是强度矩阵，直接使用
+      adj_matrix <- as.matrix(network_to_plot)
+      if(nrow(adj_matrix) == n_vars && ncol(adj_matrix) == n_vars) {
+        rownames(adj_matrix) <- colnames(adj_matrix) <- variable_names
+      }
+    }
+  } else {
+    # Figure5a: 结构图，只显示连边结构（无权重）
+    if(!is.null(network_to_plot$arcs) && nrow(network_to_plot$arcs) > 0) {
+      arcs <- network_to_plot$arcs
+      for(i in 1:nrow(arcs)) {
+        from_idx <- which(variable_names == arcs[i, "from"])
+        to_idx <- which(variable_names == arcs[i, "to"])
+        if(length(from_idx) > 0 && length(to_idx) > 0) {
+          # 结构图只显示连边，不显示权重（统一设为1）
+          adj_matrix[from_idx, to_idx] <- 1
+        }
+      }
+    } else if(!is.null(bayesian_result$stable_edges) && nrow(bayesian_result$stable_edges) > 0) {
+      # 备用方案：使用稳定边但不显示权重
+      edges <- bayesian_result$stable_edges
+      for(i in 1:nrow(edges)) {
+        from_idx <- which(variable_names == edges$from[i])
+        to_idx <- which(variable_names == edges$to[i])
+        if(length(from_idx) > 0 && length(to_idx) > 0) {
+          adj_matrix[from_idx, to_idx] <- 1
+        }
+      }
+    }
+  }
+  
+  # 设置默认颜色（如果没有提供）
+  if(is.null(colors)) {
+    if(exists("VIZ_CONFIG") && !is.null(VIZ_CONFIG$colors$primary)) {
+      colors <- VIZ_CONFIG$colors$primary[1:min(n_vars, length(VIZ_CONFIG$colors$primary))]
+    } else {
+      colors <- rainbow(n_vars)
+    }
+  }
+  
+  # 创建qgraph可视化
+  tryCatch({
+    qgraph_obj <- qgraph::qgraph(
+      adj_matrix,
+      layout = layout,
+      labels = variable_names,
+      groups = groups,
+      color = colors,
+      directed = TRUE,  # 贝叶斯网络是有向图
+      arrows = TRUE,
+      edge.labels = FALSE,  # 贝叶斯网络不显示边权重
+      edge.label.cex = 0.8,
+      vsize = 8,
+      esize = 5,
+      asize = 5,
+      title = title,
+      legend = !is.null(groups),
+      legend.cex = 0.4,
+      
+      # 边的颜色设置
+      posCol = if(exists("VIZ_CONFIG")) VIZ_CONFIG$colors$positive_edges else "#4A90E2",
+      negCol = if(exists("VIZ_CONFIG")) VIZ_CONFIG$colors$negative_edges else "#D0021B",
+      
+      # 布局参数
+      repulsion = 0.8,
+      
+      # 阈值设置
+      threshold = 0.01,  # 显示微弱的边
+      
+      # 标签设置
+      label.cex = 1.1,
+      label.color = "black"
+    )
+    
+    return(qgraph_obj)
+    
+  }, error = function(e) {
+    cat("qgraph可视化失败:", e$message, "\n")
+    
+    # 备用方案：使用基础的plot
+    if(requireNamespace("igraph", quietly = TRUE)) {
+      # 转换为igraph格式
+      edges_df <- data.frame(
+        from = rep(variable_names, each = n_vars),
+        to = rep(variable_names, n_vars),
+        weight = as.vector(adj_matrix)
+      )
+      edges_df <- edges_df[edges_df$weight > 0, ]
+      
+      if(nrow(edges_df) > 0) {
+        g <- igraph::graph_from_data_frame(edges_df, directed = TRUE, vertices = variable_names)
+        plot(g, 
+             vertex.size = 20, 
+             vertex.label.cex = 0.8,
+             edge.arrow.size = 0.5,
+             main = title)
+        return(g)
+      }
+    }
+    
+    # 最基础的备用方案
+    plot.new()
+    text(0.5, 0.5, paste("贝叶斯网络可视化失败:\n", e$message), cex = 1.2, col = "red")
+    return(NULL)
   })
 }
 
