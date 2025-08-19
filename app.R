@@ -99,6 +99,7 @@ ui <- dashboardPage(
   
   dashboardSidebar(
     sidebarMenu(
+      menuItem("首页", tabName = "homepage", icon = icon("home")),
       menuItem("数据上传", tabName = "upload", icon = icon("upload")),
       menuItem("变量构造", tabName = "construct", icon = icon("calculator")),
       menuItem("变量选择", tabName = "variables", icon = icon("check-square")),
@@ -128,6 +129,292 @@ ui <- dashboardPage(
   
   dashboardBody(
     tabItems(
+      # 首页 - 横断面网络分析研究框架
+      tabItem(
+        tabName = "homepage",
+        fluidRow(
+          box(
+            title = "横断面网络分析研究框架", status = "primary", solidHeader = TRUE, width = 12,
+            div(style = "text-align: center; margin-bottom: 30px;",
+              tags$h2("心理量表网络分析应用", style = "color: #3c8dbc; margin-bottom: 10px;"),
+              tags$h4("Cross-sectional Network Analysis for Psychological Scales", style = "color: #666; font-style: italic;"),
+              tags$hr(),
+              tags$p("基于图论的心理构念关系建模与可视化分析平台", style = "font-size: 16px; color: #555;")
+            )
+          )
+        ),
+        
+        fluidRow(
+          # 研究设计框架
+          box(
+            title = "🏗️ 研究设计框架", status = "info", solidHeader = TRUE, width = 6,
+            tags$h4("数据收集设计", style = "color: #3c8dbc;"),
+            tags$ul(
+              tags$li(tags$strong("横断面设计："), "单时间点数据收集，关注构念间关系模式"),
+              tags$li(tags$strong("大样本策略："), "推荐样本量 ≥ 1000，确保网络估计稳定性"),
+              tags$li(tags$strong("质量控制："), "多重验证机制，异常值检测与处理")
+            ),
+            
+            tags$h4("测量工具选择", style = "color: #3c8dbc; margin-top: 20px;"),
+            tags$ul(
+              tags$li(tags$strong("标准化量表："), "使用经过验证的心理测量工具"),
+              tags$li(tags$strong("多维度评估："), "涵盖目标构念的不同方面"),
+              tags$li(tags$strong("信效度保证："), "确保测量质量与可重复性")
+            )
+          ),
+          
+          # 支持的量表类型
+          box(
+            title = "📊 支持的量表类型 (共71种)", status = "success", solidHeader = TRUE, width = 6,
+            div(style = "display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;",
+              div(
+                tags$h5("🧠 情绪与心理健康", style = "color: #00a65a; font-size: 15px;"),
+                tags$p("• PHQ-9 (抑郁症状筛查)", style = "margin: 2px 0;"),
+                tags$p("• GAD-7 (广泛性焦虑)", style = "margin: 2px 0;"),
+                tags$p("• ERS-21 (情绪反应性)", style = "margin: 2px 0;"),
+                tags$p("• DERS-16 (情绪调节困难)", style = "margin: 2px 0;"),
+                tags$p("• COPE-30 (应对方式)", style = "margin: 2px 0;"),
+                tags$p("• SES-10 (自尊量表)", style = "margin: 2px 0;"),
+                tags$p("• UCLA-20 (孤独感)", style = "margin: 2px 0;"),
+                tags$p("• OCD-20 (强迫症状)", style = "margin: 2px 0;"),
+                tags$p("• OCI-18 (强迫行为)", style = "margin: 2px 0;"),
+                tags$p("• MHT-100 (心理健康)", style = "margin: 2px 0;")
+              ),
+              div(
+                tags$h5("⚡ 成瘾与冲动行为", style = "color: #00a65a; font-size: 15px;"),
+                tags$p("• AUDIT-10 (酒精使用障碍)", style = "margin: 2px 0;"),
+                tags$p("• IAT-20 (网络成瘾)", style = "margin: 2px 0;"),
+                tags$p("• IGD-9SF (游戏障碍)", style = "margin: 2px 0;"),
+                tags$p("• BSMAS-6 (社交媒体成瘾)", style = "margin: 2px 0;"),
+                tags$p("• YFAS (食物成瘾13/16/35项)", style = "margin: 2px 0;"),
+                tags$p("• BIS-11 (冲动性量表)", style = "margin: 2px 0;"),
+                tags$p("• BISBAS-18 (行为抑制/激活)", style = "margin: 2px 0;"),
+                tags$p("• HRF-18系列 (习惯-奖赏-恐惧)", style = "margin: 2px 0;"),
+                tags$p("• CGPS-18 (游戏激情)", style = "margin: 2px 0;"),
+                tags$p("• PPC-12 (问题性手机使用)", style = "margin: 2px 0;")
+              )
+            ),
+            div(style = "display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px; margin-top: 15px;",
+              div(
+                tags$h5("🏠 人际关系与社会支持", style = "color: #00a65a; font-size: 15px;"),
+                tags$p("• IPPA-25 (亲子同伴依恋)", style = "margin: 2px 0;"),
+                tags$p("• Parenting (父母教养方式)", style = "margin: 2px 0;"),
+                tags$p("• Friend-20 (朋友支持)", style = "margin: 2px 0;"),
+                tags$p("• FFSSS-10 (家庭经济支持)", style = "margin: 2px 0;"),
+                tags$p("• SSS-14 (社会支持)", style = "margin: 2px 0;"),
+                tags$p("• CBul/CBed (网络霸凌)", style = "margin: 2px 0;"),
+                tags$p("• Bul-12 (霸凌受害)", style = "margin: 2px 0;")
+              ),
+              div(
+                tags$h5("🌟 人格特质与复原力", style = "color: #00a65a; font-size: 15px;"),
+                tags$p("• CFPS-15 (大五人格1/2/3版)", style = "margin: 2px 0;"),
+                tags$p("• RICS-25 (疾病复原力)", style = "margin: 2px 0;"),
+                tags$p("• RISC-25 (复原力量表)", style = "margin: 2px 0;"),
+                tags$p("• RSCA-27 (成人复原力)", style = "margin: 2px 0;"),
+                tags$p("• EIS (情绪智力A23/B21)", style = "margin: 2px 0;"),
+                tags$p("• CSES-26 (儿童自尊)", style = "margin: 2px 0;")
+              )
+            ),
+            div(style = "display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px; margin-top: 15px;",
+              div(
+                tags$h5("🏥 临床诊断与评估", style = "color: #00a65a; font-size: 15px;"),
+                tags$p("• NSSI相关 (DSM-5/K24/变化)", style = "margin: 2px 0;"),
+                tags$p("• STBI-101 (自伤思维行为)", style = "margin: 2px 0;"),
+                tags$p("• PSQI-19 (睡眠质量)", style = "margin: 2px 0;"),
+                tags$p("• COVID-19 (疫情症状)", style = "margin: 2px 0;"),
+                tags$p("• MSSMHS-60 (中学生心理)", style = "margin: 2px 0;")
+              ),
+              div(
+                tags$h5("🍽️ 进食与其他行为", style = "color: #00a65a; font-size: 15px;"),
+                tags$p("• Cbed-10 (强迫性暴食)", style = "margin: 2px 0;"),
+                tags$p("• CNCS-10 (夜食综合征)", style = "margin: 2px 0;"),
+                tags$p("• BAS-10 (行为激活)", style = "margin: 2px 0;"),
+                tags$p("• FoMos-8 (购物错失恐惧)", style = "margin: 2px 0;"),
+                tags$p("• AAS-5 (动物态度)", style = "margin: 2px 0;"),
+                tags$p("• PPS-14 (感知压力)", style = "margin: 2px 0;")
+              )
+            ),
+            div(style = "text-align: center; margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 5px;",
+              tags$p(tags$strong("💡 智能识别"), " - 应用自动识别数据中的量表结构", style = "margin: 5px 0; color: #666;"),
+              tags$p(tags$strong("🔧 灵活配置"), " - 支持汇总/子量表/条目三个层级的分析", style = "margin: 5px 0; color: #666;"),
+              tags$p(tags$strong("📈 专业标准"), " - 遵循心理测量学和网络分析最佳实践", style = "margin: 5px 0; color: #666;")
+            )
+          )
+        ),
+        
+        fluidRow(
+          # 统计分析流程
+          box(
+            title = "📈 四步统计分析流程", status = "warning", solidHeader = TRUE, width = 12,
+            div(style = "display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin: 20px 0;",
+              # 第一步
+              div(class = "text-center",
+                  div(style = "background: #f39c12; color: white; border-radius: 50%; width: 60px; height: 60px; line-height: 60px; margin: 0 auto 15px; font-size: 24px; font-weight: bold;", "1"),
+                  tags$h4("描述性分析", style = "color: #f39c12;"),
+                  tags$p("• 样本特征描述", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 变量分布检验", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 缺失值分析", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 量表信效度", style = "font-size: 14px; margin: 5px 0;")
+              ),
+              # 第二步
+              div(class = "text-center",
+                  div(style = "background: #00a65a; color: white; border-radius: 50%; width: 60px; height: 60px; line-height: 60px; margin: 0 auto 15px; font-size: 24px; font-weight: bold;", "2"),
+                  tags$h4("传统分析", style = "color: #00a65a;"),
+                  tags$p("• 相关性分析", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 回归分析", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 中介调节", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 组间比较", style = "font-size: 14px; margin: 5px 0;")
+              ),
+              # 第三步
+              div(class = "text-center",
+                  div(style = "background: #3c8dbc; color: white; border-radius: 50%; width: 60px; height: 60px; line-height: 60px; margin: 0 auto 15px; font-size: 24px; font-weight: bold;", "3"),
+                  tags$h4("网络核心分析", style = "color: #3c8dbc;"),
+                  tags$p("• GLASSO网络估计", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 中心性指标计算", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 网络可视化", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 稳定性检验", style = "font-size: 14px; margin: 5px 0;")
+              ),
+              # 第四步
+              div(class = "text-center",
+                  div(style = "background: #dd4b39; color: white; border-radius: 50%; width: 60px; height: 60px; line-height: 60px; margin: 0 auto 15px; font-size: 24px; font-weight: bold;", "4"),
+                  tags$h4("拓展分析", style = "color: #dd4b39;"),
+                  tags$p("• 桥接网络分析", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 贝叶斯网络推理", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 网络比较测试", style = "font-size: 14px; margin: 5px 0;"),
+                  tags$p("• 临床意义解释", style = "font-size: 14px; margin: 5px 0;")
+              )
+            )
+          )
+        ),
+        
+        fluidRow(
+          # 网络分析核心方法
+          box(
+            title = "🧮 网络分析核心方法", status = "primary", solidHeader = TRUE, width = 6,
+            tags$h4("GLASSO网络估计", style = "color: #3c8dbc;"),
+            tags$ul(
+              tags$li(tags$strong("图形LASSO算法："), "稀疏高斯图形模型，控制边的密度"),
+              tags$li(tags$strong("EBIC模型选择："), "扩展贝叶斯信息准则优化网络结构"),
+              tags$li(tags$strong("偏相关系数："), "控制其他变量后的直接关联强度"),
+              tags$li(tags$strong("正则化参数："), "平衡模型复杂度与拟合优度")
+            ),
+            
+            tags$h4("中心性指标体系", style = "color: #3c8dbc; margin-top: 20px;"),
+            tags$ul(
+              tags$li(tags$strong("强度中心性："), "节点连接边权重之和"),
+              tags$li(tags$strong("紧密中心性："), "节点到其他节点的平均最短路径"),
+              tags$li(tags$strong("介数中心性："), "节点在最短路径上的频率"),
+              tags$li(tags$strong("特征向量中心性："), "考虑邻居节点重要性的递归中心性")
+            )
+          ),
+          
+          # 稳定性与验证
+          box(
+            title = "🔬 稳定性与验证", status = "danger", solidHeader = TRUE, width = 6,
+            tags$h4("边稳定性评估", style = "color: #dd4b39;"),
+            tags$ul(
+              tags$li(tags$strong("Bootstrap重采样："), "评估边权重的置信区间"),
+              tags$li(tags$strong("边精度分析："), "检验边是否显著不为零"),
+              tags$li(tags$strong("边差异检验："), "比较不同边权重的显著性差异")
+            ),
+            
+            tags$h4("中心性稳定性", style = "color: #dd4b39; margin-top: 20px;"),
+            tags$ul(
+              tags$li(tags$strong("样本丢弃分析："), "逐步丢弃样本评估中心性指标稳定性"),
+              tags$li(tags$strong("CS-coefficient："), "中心性稳定性系数，建议 > 0.25"),
+              tags$li(tags$strong("中心性差异："), "不同中心性指标间的显著性检验")
+            ),
+            
+            tags$h4("网络比较检验", style = "color: #dd4b39; margin-top: 20px;"),
+            tags$ul(
+              tags$li(tags$strong("置换检验："), "Network Comparison Test (NCT)"),
+              tags$li(tags$strong("网络结构不变性："), "整体网络结构差异检验"),
+              tags$li(tags$strong("全局强度不变性："), "网络连接强度差异检验")
+            )
+          )
+        ),
+        
+        fluidRow(
+          # 结果呈现标准
+          box(
+            title = "📋 结果呈现标准", status = "success", solidHeader = TRUE, width = 12,
+            div(style = "display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px;",
+              div(
+                tags$h4("网络可视化", style = "color: #00a65a;"),
+                tags$ul(
+                  tags$li("节点大小反映中心性指标"),
+                  tags$li("边厚度反映关联强度"),
+                  tags$li("颜色编码区分变量类型"),
+                  tags$li("布局算法优化可读性")
+                )
+              ),
+              div(
+                tags$h4("中心性图表", style = "color: #00a65a;"),
+                tags$ul(
+                  tags$li("标准化中心性指标对比"),
+                  tags$li("置信区间显示不确定性"),
+                  tags$li("排序展示相对重要性"),
+                  tags$li("多指标综合评估")
+                )
+              ),
+              div(
+                tags$h4("稳定性结果", style = "color: #00a65a;"),
+                tags$ul(
+                  tags$li("Bootstrap置信带可视化"),
+                  tags$li("CS-coefficient数值报告"),
+                  tags$li("显著性检验结果表"),
+                  tags$li("稳定性解释与建议")
+                )
+              )
+            )
+          )
+        ),
+        
+        fluidRow(
+          # 快速开始指南
+          box(
+            title = "🚀 快速开始指南", status = "info", solidHeader = TRUE, width = 12,
+            div(style = "background: #f4f4f4; padding: 20px; border-radius: 8px; margin: 15px 0;",
+              tags$h4("五步完成您的网络分析：", style = "color: #3c8dbc; margin-bottom: 20px;"),
+              div(style = "display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px;",
+                div(class = "text-center",
+                    tags$strong("步骤 1", style = "color: #f39c12; font-size: 16px;"),
+                    tags$p("上传数据文件", style = "margin: 10px 0 5px; font-weight: bold;"),
+                    tags$small("支持CSV/Excel格式")
+                ),
+                div(class = "text-center",
+                    tags$strong("步骤 2", style = "color: #00a65a; font-size: 16px;"),
+                    tags$p("构造量表变量", style = "margin: 10px 0 5px; font-weight: bold;"),
+                    tags$small("自动识别量表结构")
+                ),
+                div(class = "text-center",
+                    tags$strong("步骤 3", style = "color: #3c8dbc; font-size: 16px;"),
+                    tags$p("选择分析变量", style = "margin: 10px 0 5px; font-weight: bold;"),
+                    tags$small("多层级分析选项")
+                ),
+                div(class = "text-center",
+                    tags$strong("步骤 4", style = "color: #dd4b39; font-size: 16px;"),
+                    tags$p("运行网络分析", style = "margin: 10px 0 5px; font-weight: bold;"),
+                    tags$small("一键生成网络图")
+                ),
+                div(class = "text-center",
+                    tags$strong("步骤 5", style = "color: #605ca8; font-size: 16px;"),
+                    tags$p("下载分析结果", style = "margin: 10px 0 5px; font-weight: bold;"),
+                    tags$small("图表和数据导出")
+                )
+              )
+            ),
+            
+            div(style = "text-align: center; margin-top: 25px;",
+              actionButton("start_analysis", "开始您的网络分析", 
+                          icon = icon("play"), 
+                          class = "btn-primary btn-lg",
+                          style = "font-size: 18px; padding: 12px 30px;")
+            )
+          )
+        )
+      ),
+      
       # 数据上传页面
       tabItem(
         tabName = "upload",
@@ -6430,6 +6717,13 @@ server <- function(input, output, session) {
       writeLines(report_content, file)
     }
   )
+  
+  # 首页"开始分析"按钮观察器
+  observeEvent(input$start_analysis, {
+    updateTabItems(session, "sidebar", "upload")
+    showNotification("欢迎开始您的网络分析！请先上传数据文件。", 
+                    type = "message", duration = 3)
+  })
 }
 
 # =============================================================================
