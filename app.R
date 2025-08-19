@@ -511,12 +511,6 @@ ui <- dashboardPage(
             ),
             box(
               title = "桥接分析信息", status = "info", solidHeader = TRUE, width = 4,
-              h5("🌉 桥接节点"),
-              verbatimTextOutput("bridge_nodes_info"),
-              br(),
-              h5("📊 桥接中心性"),
-              verbatimTextOutput("bridge_centrality_info"),
-              br(),
               h5("📋 桥接中心性详表"),
               DT::dataTableOutput("bridge_centrality_table"),
               br(),
@@ -2304,40 +2298,60 @@ server <- function(input, output, session) {
             n_vars <- length(variable_names)
             available_colors <- VIZ_CONFIG$colors$primary
             
-            # 创建变量索引分组
-            groups_by_index <- list()
+            # 使用在变量选择时预构建的groups参数
+            groups_by_index <- values$scale_groups
             
-            # 为每个分组分配变量索引
-            for(i in seq_along(values$variable_groups)) {
-              group_name <- names(values$variable_groups)[i]
-              scales_in_group <- values$variable_groups[[i]]
+            # 要求必须有预构建的groups参数
+            if(is.null(groups_by_index) || length(groups_by_index) == 0) {
+              stop("缺少groups参数，请先确认变量选择")
+            }
+            
+            # 生成颜色向量 - 按问卷分配颜色
+            color_vector <- rep("#999999", n_vars)  # 默认灰色
+            
+            # 为每个问卷分配颜色
+            for(i in seq_along(groups_by_index)) {
+              scale_name <- names(groups_by_index)[i]
+              color_index <- ((i-1) %% length(available_colors)) + 1
+              scale_color <- available_colors[color_index]
+              scale_indices <- groups_by_index[[i]]
               
-              # 找到属于这个分组的变量索引
-              group_indices <- c()
-              for(scale_name in scales_in_group) {
-                # 多种匹配策略找到变量索引
-                matching_indices <- which(
-                  variable_names == scale_name |
-                  startsWith(variable_names, paste0(scale_name, "_")) |
-                  grepl(paste0("_", scale_name, "_"), variable_names) |
-                  endsWith(variable_names, paste0("_", scale_name))
-                )
-                group_indices <- c(group_indices, matching_indices)
-              }
-              
-              if(length(group_indices) > 0) {
-                groups_by_index[[group_name]] <- unique(group_indices)
+              # 直接分配颜色，如果索引错误就让它报错
+              color_vector[scale_indices] <- scale_color
+            }
+            
+            # 检查未分配的变量
+            unassigned_vars <- which(color_vector == "#999999")
+            if(length(unassigned_vars) > 0) {
+              # 为未分配的变量分配颜色
+              for(idx in unassigned_vars) {
+                color_index <- ((idx-1) %% length(available_colors)) + 1
+                color_vector[idx] <- available_colors[color_index]
               }
             }
             
-            # 生成颜色向量
-            color_vector <- rep("#999999", n_vars)  # 默认灰色
+            # 直接保存groups_by_index用于quickNet
+            values$network_groups_by_index <- groups_by_index
+            
+            # 创建组级别的颜色向量（用于quickNet的groups参数）
+            group_colors <- character(length(groups_by_index))
             for(i in seq_along(groups_by_index)) {
               color_index <- ((i-1) %% length(available_colors)) + 1
-              group_color <- available_colors[color_index]
-              group_indices <- groups_by_index[[i]]
-              color_vector[group_indices] <- group_color
+              group_colors[i] <- available_colors[color_index]
             }
+            values$network_group_colors <- group_colors
+            
+            # 简化调试输出
+            cat("Groups: list(", paste(sapply(names(groups_by_index), function(x) {
+              indices <- groups_by_index[[x]]
+              if(length(indices) == 1) {
+                paste0(x, "=", indices)
+              } else if(all(diff(indices) == 1) && length(indices) > 1) {
+                paste0(x, "=", min(indices), ":", max(indices))
+              } else {
+                paste0(x, "=c(", paste(indices, collapse = ","), ")")
+              }
+            }), collapse = ", "), ")\n")
             
             color_vector
           } else {
@@ -2351,10 +2365,25 @@ server <- function(input, output, session) {
         
         values$network_result <- safe_network_analysis(
           data = analysis_data_final,
+          title = "Network Analysis",
+          groups = values$network_groups_by_index,  # 使用正确的索引格式分组
           threshold = input$threshold %||% 0.05,
-          edge_labels = FALSE,  # 只显示连边，不显示权重
-          colors = colors
+          edge.labels = TRUE,  # 按您的要求显示边权重
+          colors = values$network_group_colors,  # 使用组级别的颜色向量
+          layout = values$layout
         )
+        
+        # 保存layout和配色信息供后续网络分析使用
+        if(!is.null(values$network_result)) {
+          # 保存配色方案
+          values$colors <- colors
+          # 保存groups信息
+          values$groups <- values$variable_groups
+          # 从quickNet结果中提取layout（如果可用）
+          if(is.list(values$network_result) && !is.null(values$network_result$layout)) {
+            values$layout <- values$network_result$layout
+          }
+        }
         
         # 使用get_network_plot函数保存网络分析结果
         tryCatch({
@@ -2505,8 +2534,19 @@ server <- function(input, output, session) {
                 missing_vars <- setdiff(1:total_vars, all_assigned)
                 
                 if(length(missing_vars) > 0) {
-                  # 创建一个额外的组包含未分配的变量
-                  bridge_groups[["其他"]] <- missing_vars
+                  # 为未分配的变量创建合理的组名
+                  missing_var_names <- variable_names[missing_vars]
+                  # 尝试从变量名推断量表名
+                  inferred_groups <- list()
+                  for(var_name in missing_var_names) {
+                    scale_prefix <- gsub("_.*$", "", var_name)  # 提取下划线前的部分
+                    if(!scale_prefix %in% names(inferred_groups)) {
+                      inferred_groups[[scale_prefix]] <- c()
+                    }
+                    inferred_groups[[scale_prefix]] <- c(inferred_groups[[scale_prefix]], which(variable_names == var_name))
+                  }
+                  # 合并到bridge_groups
+                  bridge_groups <- c(bridge_groups, inferred_groups)
                 }
                 
                 # 验证索引范围和communities格式
@@ -2583,39 +2623,62 @@ server <- function(input, output, session) {
                     }
                   }
                   
-                  # 创建英文版的bridge_groups用于显示
-                  bridge_groups_en <- values$bridge_groups
-                  if(is.vector(bridge_groups_en) && !is.null(names(bridge_groups_en))) {
-                    # 如果是命名向量，替换名称
-                    group_levels <- unique(bridge_groups_en)
-                    for(i in seq_along(group_levels)) {
-                      original_name <- group_levels[i]
-                      if(!is.null(group_name_mapping[[original_name]])) {
-                        bridge_groups_en[bridge_groups_en == original_name] <- group_name_mapping[[original_name]]
-                      }
+                  # 创建桥接节点信息：保持原有量表分组，但用形状区分桥接节点
+                  variable_names <- colnames(analysis_data_final)
+                  n_vars <- length(variable_names)
+                  
+                  # 根据原始分组重建组名（使用量表名而不是Bridge）
+                  bridge_groups_display <- rep("未分组", n_vars)
+                  names(bridge_groups_display) <- variable_names
+                  
+                  # 根据原始变量分组重新分配组名
+                  for(group_name in names(values$variable_groups)) {
+                    scales_in_group <- values$variable_groups[[group_name]]
+                    for(scale_name in scales_in_group) {
+                      matching_indices <- which(
+                        startsWith(variable_names, paste0(scale_name, "_")) |
+                        grepl(paste0("_", scale_name, "_"), variable_names) |
+                        endsWith(variable_names, paste0("_", scale_name)) |
+                        variable_names == scale_name
+                      )
+                      bridge_groups_display[matching_indices] <- group_name
                     }
                   }
                   
-                  # 创建桥接节点的形状信息
-                  shape_list <- ifelse(bridge_groups_en == "Bridge", "square", "circle")
+                  # 创建形状信息：桥接节点用方形，普通节点用圆形
+                  shape_list <- ifelse(values$bridge_groups == "Bridge", "square", "circle")
+                  bridge_groups_en <- bridge_groups_display
                   
-                  # 为桥接网络设计配色方案
-                  bridge_colors <- c("#63bbd0", "#f87599", "#fed71a", "#d1c2d3")  # 参考提供的代码
-                  unique_groups <- unique(bridge_groups_en)
-                  bridge_color_map <- bridge_colors[1:length(unique_groups)]
-                  names(bridge_color_map) <- unique_groups
+                  # 使用您指定的确切配色方案
+                  zcolor <- c("#63bbd0","#f87599","#f1f0ed","#fc8c23","#1ba784","#63bbd0","#f87599","#fed71a",
+                              "#d1c2d3","#304fb0","#c6dfc8","#a8456b","#2486b9",
+                              "#e16c96","#fc8c23","#280c1c",
+                              "#fbb957","#de1c31","#ee3f4d",
+                              "#c0c4c3","#c6e6e8",
+                              "#12a182","#eb3c70","#eaad1a","#45b787","#d11a2d",
+                              "#eea08c","#cfccc9",
+                              "#2b1216","#61649f","#93b5cf","#c4cbcf",
+                              "#c4d7d6","#248067","#fbda41","#f1f0ed")
+                  
+                  # 使用组级别的颜色向量
+                  bridge_colors <- if(!is.null(values$network_group_colors)) {
+                    values$network_group_colors
+                  } else {
+                    zcolor[1:length(values$network_groups_by_index)]
+                  }
                   
                   # 生成桥接网络图（使用quickNet，突出显示桥接节点）
                   values$bridge_network <- quickNet(
                     analysis_data_final,
                     title = "Bridge Network Analysis", 
-                    groups = bridge_groups_en,  # 使用英文组名
+                    groups = values$network_groups_by_index,  # 使用正确的索引格式分组
                     shape = shape_list,
                     threshold = input$threshold %||% 0.05,
                     edge.labels = input$show_edge_labels %||% TRUE,
                     posCol = c("#2376b7", "#134857"),  # 正边颜色
                     negCol = c("#d2568c", "#62102e"),  # 负边颜色
-                    color = bridge_colors[1:length(unique(bridge_groups_en))],  # 节点颜色
+                    color = bridge_colors,  # 使用组级别的配色
+                    layout = values$layout,  # 使用统一的layout
                     legend = TRUE, 
                     legend.cex = 0.4,
                     vsize = 6, 
@@ -2629,7 +2692,7 @@ server <- function(input, output, session) {
                   tryCatch({
                     if(requireNamespace("quickNet", quietly = TRUE)) {
                       timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
-                      prefix_network <- paste0("Figure3B_bridge_network_", timestamp)
+                      prefix_network <- paste0("Fig3B_bridge_network_", timestamp)
                       
                       # 设置工作目录到输出文件夹
                       if(!is.null(values$output_folder)) {
@@ -2656,7 +2719,7 @@ server <- function(input, output, session) {
                   tryCatch({
                     if(requireNamespace("quickNet", quietly = TRUE)) {
                       timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
-                      prefix_centrality <- paste0("Figure3C_bridge_centrality_", timestamp)
+                      prefix_centrality <- paste0("Fig3c_bridge_centrality_", timestamp)
                       
                       # 设置工作目录到输出文件夹
                       if(!is.null(values$output_folder)) {
@@ -2800,151 +2863,6 @@ server <- function(input, output, session) {
     })
   })
   
-  # 桥接节点信息输出
-  output$bridge_nodes_info <- renderText({
-    req(values$bridge_groups)
-    
-    if(is.null(values$bridge_groups)) {
-      return("未找到桥接节点信息")
-    }
-    
-    # 调试输出：显示bridge_groups的实际内容
-    cat("桥接节点信息 - bridge_groups类型:", class(values$bridge_groups), "\n")
-    cat("桥接节点信息 - bridge_groups长度:", length(values$bridge_groups), "\n")
-    cat("桥接节点信息 - bridge_groups内容:", values$bridge_groups, "\n")
-    cat("桥接节点信息 - bridge_groups名称:", names(values$bridge_groups), "\n")
-    
-    # 统计桥接节点 - 处理多种可能的格式
-    bridge_nodes <- c()
-    if(is.vector(values$bridge_groups) && !is.null(names(values$bridge_groups))) {
-      # 情况1：命名向量，桥接节点标记为"Bridge"
-      bridge_nodes <- names(values$bridge_groups)[values$bridge_groups == "Bridge"]
-    } else if(is.list(values$bridge_groups) && !is.null(values$bridge_groups$Bridge)) {
-      # 情况2：列表格式，包含Bridge元素
-      bridge_nodes <- values$bridge_groups$Bridge
-    } else if(is.character(values$bridge_groups)) {
-      # 情况3：字符向量，直接包含桥接节点名称
-      bridge_nodes <- values$bridge_groups
-    }
-    
-    if(length(bridge_nodes) == 0) {
-      return("在当前阈值下未识别到桥接节点\n\n💡 提示：\n• 尝试降低网络阈值\n• 增加桥接节点数量(n)参数\n• 检查变量分组是否合理")
-    }
-    
-    # 格式化输出
-    result <- paste0("🌉 识别到 ", length(bridge_nodes), " 个桥接节点：\n\n")
-    result <- paste0(result, paste(bridge_nodes, collapse = ", "), "\n\n")
-    
-    # 添加各组的节点信息
-    result <- paste0(result, "📊 各组节点分布：\n")
-    for(group_name in unique(values$bridge_groups)) {
-      group_nodes <- names(values$bridge_groups)[values$bridge_groups == group_name]
-      result <- paste0(result, "• ", group_name, " (", length(group_nodes), " 个): ", 
-                      paste(head(group_nodes, 5), collapse = ", "))
-      if(length(group_nodes) > 5) {
-        result <- paste0(result, "...")
-      }
-      result <- paste0(result, "\n")
-    }
-    
-    return(result)
-  })
-  
-  # 桥接中心性信息输出
-  output$bridge_centrality_info <- renderText({
-    req(values$bridge_result, values$bridge_groups)
-    
-    tryCatch({
-      if(is.null(values$bridge_result) || is.null(values$bridge_groups)) {
-        return("未找到桥接分析结果")
-      }
-      
-      # 提取桥接中心性信息
-      if(is.list(values$bridge_result) && !is.null(values$bridge_result$bridge_data)) {
-        bridge_centrality <- values$bridge_result$bridge_data
-        
-        # 尝试多种方式获取桥接节点
-        bridge_nodes <- c()
-        bridge_indices <- c()
-        
-        if(is.vector(values$bridge_groups) && !is.null(names(values$bridge_groups))) {
-          # 情况1：命名向量，查找"Bridge"标记的节点
-          if("Bridge" %in% values$bridge_groups) {
-            bridge_nodes <- names(values$bridge_groups)[values$bridge_groups == "Bridge"]
-            bridge_indices <- which(values$bridge_groups == "Bridge")
-          }
-        } else if(is.list(values$bridge_groups)) {
-          # 情况2：列表格式
-          if(!is.null(values$bridge_groups$Bridge)) {
-            bridge_nodes <- values$bridge_groups$Bridge
-            if(is.character(bridge_nodes)) {
-              # 如果是变量名，找到对应的索引
-              all_vars <- colnames(values$analysis_data)
-              bridge_indices <- which(all_vars %in% bridge_nodes)
-            }
-          }
-        }
-        
-        # 如果上面的方法都没找到，尝试从桥接中心性最高的节点中推断
-        if(length(bridge_nodes) == 0 && length(bridge_centrality) > 0) {
-          # 取桥接中心性最高的几个节点
-          top_indices <- order(bridge_centrality, decreasing = TRUE)[1:min(3, length(bridge_centrality))]
-          bridge_centrality_threshold <- quantile(bridge_centrality, 0.8, na.rm = TRUE)
-          bridge_indices <- which(bridge_centrality >= bridge_centrality_threshold)
-          
-          if(length(bridge_indices) > 0) {
-            all_vars <- colnames(values$analysis_data)
-            if(length(all_vars) >= max(bridge_indices)) {
-              bridge_nodes <- all_vars[bridge_indices]
-            }
-          }
-        }
-        
-        # 如果找到了桥接节点，计算并显示桥接中心性
-        if(length(bridge_nodes) > 0 && length(bridge_indices) > 0 && 
-           length(bridge_centrality) >= max(bridge_indices)) {
-          
-          bridge_cent_values <- bridge_centrality[bridge_indices]
-          
-          # 排序显示
-          if(length(bridge_cent_values) > 0) {
-            bridge_ranking <- data.frame(
-              Node = bridge_nodes,
-              BridgeCentrality = round(bridge_cent_values, 4),
-              stringsAsFactors = FALSE
-            )
-            bridge_ranking <- bridge_ranking[order(-bridge_ranking$BridgeCentrality), ]
-            
-            result <- paste0(
-              "🌉 桥接中心性排名\n",
-              strrep("=", 20), "\n\n"
-            )
-            
-            for(i in 1:nrow(bridge_ranking)) {
-              result <- paste0(result, 
-                sprintf("%d. %s: %.4f\n", i, bridge_ranking$Node[i], bridge_ranking$BridgeCentrality[i])
-              )
-            }
-            
-            # 添加解释
-            result <- paste0(result, "\n",
-              "💡 说明：\n",
-              "• 数值越高，该节点的桥接作用越强\n",
-              "• 桥接中心性衡量节点连接不同社群的能力\n",
-              "• 高桥接中心性的节点是干预的重点目标"
-            )
-            
-            return(result)
-          }
-        }
-      }
-      
-      return("桥接中心性信息不可用")
-      
-    }, error = function(e) {
-      return(paste("桥接中心性计算失败:", e$message))
-    })
-  })
   
   # 桥接中心性数据表格 - 读取get_bridge_plot生成的CSV文件
   output$bridge_centrality_table <- DT::renderDataTable({
@@ -3112,22 +3030,7 @@ server <- function(input, output, session) {
   # 中心性图输出
   output$centrality_plot <- renderPlot({
     req(values$centrality_result)
-    
-    # 检查中心性结果是否有效
-    if (is.null(values$centrality_result)) {
-      plot.new()
-      text(0.5, 0.5, "中心性结果为空", cex = 1.2, col = "red")
-      return(NULL)
-    }
-    
-    # 显示PDF文件生成位置信息（如果存在），但仍显示中心性图
-    
-    tryCatch({
-      get_centrality_plot(values$centrality_result)
-    }, error = function(e) {
-      plot.new()
-      text(0.5, 0.5, paste("中心性图绘制失败:", e$message), cex = 1, col = "red", adj = c(0.5, 0.5))
-    })
+    plot(values$centrality_result$centralityPlot)
   })
   
   # 独立的稳定性分析
@@ -3557,7 +3460,9 @@ server <- function(input, output, session) {
           group1_name <- paste0(input$group_variable, "_低27%")
           group2_name <- paste0(input$group_variable, "_高27%")
         } else if(input$group_method == "categorical") {
-          # 分类变量分组
+          # 分类变量分组 - 先进行性别变量智能标准化
+          group_var <- standardize_gender_variable(group_var, input$group_variable)
+          
           unique_values <- unique(group_var[!is.na(group_var)])
           
           cat("分类变量分组调试:\n")
@@ -3620,12 +3525,47 @@ server <- function(input, output, session) {
         
         incProgress(0.3, detail = paste0("组1: ", nrow(group1_data), " 案例, 组2: ", nrow(group2_data), " 案例"))
         
+        # 数据清理：移除无限值和缺失值
+        incProgress(0.4, detail = "清理数据...")
+        
+        # 清理group1_data
+        group1_clean <- group1_data
+        for(col in names(group1_clean)) {
+          if(is.numeric(group1_clean[[col]])) {
+            # 移除无限值和缺失值
+            group1_clean[[col]][!is.finite(group1_clean[[col]])] <- NA
+          }
+        }
+        # 移除包含任何缺失值的行
+        group1_clean <- group1_clean[complete.cases(group1_clean), ]
+        
+        # 清理group2_data
+        group2_clean <- group2_data
+        for(col in names(group2_clean)) {
+          if(is.numeric(group2_clean[[col]])) {
+            # 移除无限值和缺失值
+            group2_clean[[col]][!is.finite(group2_clean[[col]])] <- NA
+          }
+        }
+        # 移除包含任何缺失值的行
+        group2_clean <- group2_clean[complete.cases(group2_clean), ]
+        
+        # 检查清理后的样本量
+        if(nrow(group1_clean) < 10 || nrow(group2_clean) < 10) {
+          showNotification(paste0("数据清理后样本量过小（组1: ", nrow(group1_clean), ", 组2: ", nrow(group2_clean), "），每组至少需要10个完整案例"), type = "error")
+          return()
+        }
+        
+        cat("数据清理结果:\n")
+        cat("组1: 原始", nrow(group1_data), "行 -> 清理后", nrow(group1_clean), "行\n")
+        cat("组2: 原始", nrow(group2_data), "行 -> 清理后", nrow(group2_clean), "行\n")
+        
         # 执行网络比较
         incProgress(0.5, detail = "执行置换检验...")
         
         if(requireNamespace("quickNet", quietly = TRUE)) {
           compare_result <- NetCompare(
-            group1_data, group2_data,
+            group1_clean, group2_clean,
             it = input$permutation_n,
             p.adjust.methods = input$p_adjust_method
           )
@@ -3659,8 +3599,8 @@ server <- function(input, output, session) {
           values$group_compare_result <- list(
             compare_result = compare_result,
             nct_result = nct_result,  # 添加结构化的NCT结果
-            group1_data = group1_data,
-            group2_data = group2_data,
+            group1_data = group1_clean,  # 使用清理后的数据
+            group2_data = group2_clean,  # 使用清理后的数据
             group1_name = group1_name,
             group2_name = group2_name,
             group_variable = input$group_variable,
@@ -3674,7 +3614,9 @@ server <- function(input, output, session) {
           tryCatch({
             if(requireNamespace("quickNet", quietly = TRUE)) {
               timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
-              prefix <- paste0("Fig4_NetworkDiff_", group1_name, "_minus_", group2_name, "_", timestamp)
+              
+              # 简洁命名：Fig3
+              prefix <- "Fig3"
               
               # 切换到输出文件夹
               if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
@@ -3686,22 +3628,26 @@ server <- function(input, output, session) {
               # 需要为get_compare_plot提供网络对象，使用主网络分析结果
               network_obj <- values$network_result
               
-              # 调用get_compare_plot生成PDF图和CSV数据
-              get_compare_plot(compare_result, network_obj, 
+              # 调用get_compare_plot生成PDF图（按照你的标准格式）
+              quickNet::get_compare_plot(compare_result, network_obj, 
                              prefix = prefix, 
                              width = 6, height = 4.5)
               
-              # 保存PDF和CSV文件路径
-              values$compare_pdf_path <- file.path(values$output_folder, paste0(prefix, "_compare_plot.pdf"))
-              values$compare_diff_csv_path <- file.path(values$output_folder, paste0(prefix, "_diff_sig.csv"))
-              values$compare_pval_csv_path <- file.path(values$output_folder, paste0(prefix, "_edge_weight_p.csv"))
+              # 简洁命名的CSV文件
+              diff_csv_filename <- paste0(prefix, "_diff.csv")
+              pval_csv_filename <- paste0(prefix, "_pval.csv")
               
-              # 手动生成CSV数据文件（按照tutorial.R的模式）
+              # 保存文件路径
+              values$compare_pdf_path <- file.path(values$output_folder, paste0(prefix, ".pdf"))
+              values$compare_diff_csv_path <- file.path(values$output_folder, diff_csv_filename)
+              values$compare_pval_csv_path <- file.path(values$output_folder, pval_csv_filename)
+              
+              # 按照tutorial标准格式生成CSV数据文件
               if(!is.null(compare_result$diff_sig)) {
                 write.csv(data.frame(compare_result$diff_sig), 
                          values$compare_diff_csv_path, 
                          row.names = TRUE)
-                cat("已保存差异显著性CSV:", values$compare_diff_csv_path, "\n")
+                cat("已保存差异网络CSV:", values$compare_diff_csv_path, "\n")
               }
               
               if(!is.null(compare_result$edge_weight_p)) {
@@ -3732,9 +3678,10 @@ server <- function(input, output, session) {
               if(requireNamespace("quickNet", quietly = TRUE)) {
                 # 构建组1的网络用于桥接分析
                 group1_network <- safe_network_analysis(
-                  data = group1_data,
+                  data = group1_clean,  # 使用清理后的数据
                   threshold = input$threshold %||% 0.05,
-                  edge_labels = FALSE  # 桥接比较时简化显示
+                  edge_labels = FALSE,  # 桥接比较时简化显示
+                  colors = values$colors  # 使用统一的配色
                 )
                 
                 # 组1桥接分析
@@ -3744,9 +3691,10 @@ server <- function(input, output, session) {
                 
                 # 构建组2的网络用于桥接分析
                 group2_network <- safe_network_analysis(
-                  data = group2_data,
+                  data = group2_clean,  # 使用清理后的数据
                   threshold = input$threshold %||% 0.05,
-                  edge_labels = FALSE
+                  edge_labels = FALSE,  # 桥接比较时简化显示
+                  colors = values$colors  # 使用统一的配色
                 )
                 
                 # 组2桥接分析
@@ -3800,7 +3748,7 @@ server <- function(input, output, session) {
           
           incProgress(1, detail = "组间比较完成!")
           
-          showNotification(paste0("组间比较分析完成！组1: ", nrow(group1_data), " 案例，组2: ", nrow(group2_data), " 案例"), type = "message")
+          showNotification(paste0("组间比较分析完成！组1: ", nrow(group1_clean), " 案例，组2: ", nrow(group2_clean), " 案例"), type = "message")
           
         } else {
           showNotification("quickNet包不可用，无法进行组间比较", type = "error")
@@ -3822,7 +3770,7 @@ server <- function(input, output, session) {
     # 如果没有PDF文件，则直接显示比较图（与get_compare_plot相同参数）
     tryCatch({
       if(requireNamespace("quickNet", quietly = TRUE)) {
-        get_compare_plot(values$group_compare_result$compare_result, values$network_result)
+        quickNet::get_compare_plot(values$group_compare_result$compare_result, values$network_result)
       } else {
         plot.new()
         text(0.5, 0.5, "quickNet包不可用", cex = 1.5, col = "red")
@@ -4364,8 +4312,7 @@ server <- function(input, output, session) {
   # 网络比较图下载
   output$download_compare_plot <- downloadHandler(
     filename = function() {
-      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
-      paste0("network_compare_plot_", timestamp, ".pdf")
+      "Fig3.pdf"
     },
     content = function(file) {
       tryCatch({
@@ -4377,7 +4324,7 @@ server <- function(input, output, session) {
           # 备用方案：重新生成PDF
           pdf(file, width = 6, height = 4.5)
           if(!is.null(values$group_compare_result)) {
-            get_compare_plot(values$group_compare_result$compare_result, values$network_result)
+            quickNet::get_compare_plot(values$group_compare_result$compare_result, values$network_result)
           } else {
             plot.new()
             text(0.5, 0.5, "网络比较结果不可用", cex = 1.5, col = "red")
@@ -4393,8 +4340,7 @@ server <- function(input, output, session) {
   # 网络比较差异数据下载
   output$download_compare_diff <- downloadHandler(
     filename = function() {
-      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
-      paste0("network_compare_diff_", timestamp, ".csv")
+      "Fig3_diff.csv"
     },
     content = function(file) {
       tryCatch({
@@ -4421,8 +4367,7 @@ server <- function(input, output, session) {
   # 网络比较P值数据下载
   output$download_compare_pval <- downloadHandler(
     filename = function() {
-      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
-      paste0("network_compare_pval_", timestamp, ".csv")
+      "Fig3_pval.csv"
     },
     content = function(file) {
       tryCatch({
@@ -5159,6 +5104,8 @@ server <- function(input, output, session) {
       
       scales_info <- values$calculated_scales$summary
       final_variables <- character(0)
+      scale_groups <- list()  # 用于构建groups参数
+      current_index <- 1      # 当前变量索引
       
       # 定义总分变量模式（保持一致性）
       total_patterns <- c("_Total$", "_mean$", "_sum$", "_weighted$", "_max$", "_cfa$", "_pca$", "_factor$", "_std$")
@@ -5172,25 +5119,28 @@ server <- function(input, output, session) {
         
         is_manual <- !is.null(scale_info$is_manual) && scale_info$is_manual
         
+        # 记录这个量表的起始索引
+        scale_start_index <- current_index
+        scale_variables <- character(0)
+        
         if(selected_level == "summary") {
           # 汇总层：选择合适的变量
           if(is_manual) {
             # 手动规则：使用生成的变量
-            final_variables <- c(final_variables, scale_info$new_variables)
+            scale_variables <- scale_info$new_variables
           } else {
             # 预配置量表：优先选择总分变量
             total_vars_names <- scale_info$new_variables[sapply(scale_info$new_variables, function(x) any(sapply(total_patterns, function(p) grepl(p, x))))]
             if(length(total_vars_names) > 0) {
-              final_variables <- c(final_variables, total_vars_names[1])
+              scale_variables <- total_vars_names[1]
             } else {
-              final_variables <- c(final_variables, scale_info$new_variables[1])
+              scale_variables <- scale_info$new_variables[1]
             }
           }
           
         } else if(selected_level == "subscale") {
           # 子量表层：选择非总分变量（排除所有总分模式）
-          subscale_vars <- scale_info$new_variables[!sapply(scale_info$new_variables, function(x) any(sapply(total_patterns, function(p) grepl(p, x))))]
-          final_variables <- c(final_variables, subscale_vars)
+          scale_variables <- scale_info$new_variables[!sapply(scale_info$new_variables, function(x) any(sapply(total_patterns, function(p) grepl(p, x))))]
           
         } else if(selected_level == "items") {
           # 条目层：选择原始条目变量
@@ -5198,9 +5148,25 @@ server <- function(input, output, session) {
              scale_name %in% names(values$calculated_scales$available_scales)) {
             available_scale_info <- values$calculated_scales$available_scales[[scale_name]]
             if(!is.null(available_scale_info$existing_items)) {
-              final_variables <- c(final_variables, available_scale_info$existing_items)
+              scale_variables <- available_scale_info$existing_items
             }
           }
+        }
+        
+        # 添加到final_variables并记录groups信息
+        if(length(scale_variables) > 0) {
+          final_variables <- c(final_variables, scale_variables)
+          
+          # 计算这个量表的索引范围
+          scale_end_index <- current_index + length(scale_variables) - 1
+          if(length(scale_variables) == 1) {
+            scale_groups[[scale_name]] <- scale_start_index
+          } else {
+            scale_groups[[scale_name]] <- scale_start_index:scale_end_index
+          }
+          
+          # 更新当前索引
+          current_index <- scale_end_index + 1
         }
       }
       
@@ -5215,6 +5181,30 @@ server <- function(input, output, session) {
       # 保存最终选择的变量用于网络分析
       values$analysis_data <- values$processed_data[, final_variables, drop = FALSE]
       values$variables_confirmed <- TRUE
+      
+      # 保存构建好的groups参数
+      values$scale_groups <- scale_groups
+      
+      # 调试输出groups信息
+      cat("=== 构建的Groups参数 ===\n")
+      cat("变量列表:", paste(final_variables, collapse = ", "), "\n")
+      for(scale_name in names(scale_groups)) {
+        indices <- scale_groups[[scale_name]]
+        if(length(indices) == 1) {
+          cat("- ", scale_name, ": ", indices, "\n")
+        } else {
+          cat("- ", scale_name, ": ", min(indices), ":", max(indices), "\n")
+        }
+      }
+      cat("Groups格式: list(", paste(sapply(names(scale_groups), function(x) {
+        indices <- scale_groups[[x]]
+        if(length(indices) == 1) {
+          paste0(x, "=", indices)
+        } else {
+          paste0(x, "=", min(indices), ":", max(indices))
+        }
+      }), collapse = ", "), ")\n")
+      cat("======================\n")
       
       showNotification(paste0("已确认选择 ", length(final_variables), " 个变量用于网络分析"), type = "message")
       
@@ -5278,7 +5268,7 @@ server <- function(input, output, session) {
       if(is.null(values$variable_groups)) {
         values$variable_groups <- list()
         for(i in seq_along(scale_names)) {
-          values$variable_groups[[paste0("组", i)]] <- scale_names[i]
+          values$variable_groups[[scale_names[i]]] <- scale_names[i]
         }
       }
       
@@ -5784,7 +5774,7 @@ server <- function(input, output, session) {
             auto_save_result("bayesian", 
                             result_object = values$bayesian_result,
                             data_frame = edges_df,
-                            filename_prefix = "Fig4_bayesian_network")
+                            filename_prefix = "Fig5b_bayesian_network")
           }
         }
         
@@ -5808,14 +5798,14 @@ server <- function(input, output, session) {
             } else NULL
             
             # Figure5a: 贝叶斯网络结构图（无权重的学习图结构）
-            figure5a_file <- paste0("Figure5a_bayesian_structure_", timestamp, ".pdf")
+            figure5a_file <- paste0("Fig5a_bayesian_structure_", timestamp, ".pdf")
             pdf(figure5a_file, width = 8, height = 6)
             tryCatch({
               if(!is.null(values$bayesian_result) && !is.null(values$bayesian_result$learned_network)) {
                 create_bayesian_network_plot(
                   bayesian_result = values$bayesian_result,
-                  colors = colors,
-                  groups = groups,
+                  colors = values$network_group_colors,  # 使用组级别颜色
+                  groups = values$network_groups_by_index,  # 使用正确的索引格式分组
                   title = "Bayesian Network Structure",
                   network_type = "structure"  # 仅显示结构，无权重
                 )
@@ -5828,14 +5818,14 @@ server <- function(input, output, session) {
             values$bayesian_structure_pdf <- figure5a_file
             
             # Figure5b: 贝叶斯平均网络图（带颜色强度值的版本）
-            figure5b_file <- paste0("Figure5b_bayesian_averaged_", timestamp, ".pdf")
+            figure5b_file <- paste0("Fig5b_bayesian_averaged_", timestamp, ".pdf")
             pdf(figure5b_file, width = 8, height = 6)
             tryCatch({
               if(!is.null(values$bayesian_result) && !is.null(values$bayesian_result$averaged_network)) {
                 create_bayesian_network_plot(
                   bayesian_result = values$bayesian_result,
-                  colors = colors,
-                  groups = groups,
+                  colors = values$network_group_colors,  # 使用组级别颜色
+                  groups = values$network_groups_by_index,  # 使用正确的索引格式分组
                   title = "Averaged Bayesian Network",
                   network_type = "averaged"  # 显示平均网络，带权重强度
                 )
@@ -5848,7 +5838,7 @@ server <- function(input, output, session) {
             values$bayesian_averaged_pdf <- figure5b_file
             
             # Figure5a对应的CSV: 贝叶斯网络结构数据
-            figure5a_csv <- paste0("Figure5a_bayesian_structure_", timestamp, ".csv")
+            figure5a_csv <- paste0("Fig5a_bayesian_structure_", timestamp, ".csv")
             if(!is.null(values$bayesian_result$learned_network)) {
               structure_data <- data.frame(
                 From = character(0),
@@ -5869,7 +5859,7 @@ server <- function(input, output, session) {
             }
             
             # Figure5b对应的CSV: 贝叶斯网络强度数据
-            figure5b_csv <- paste0("Figure5b_bayesian_averaged_", timestamp, ".csv")
+            figure5b_csv <- paste0("Fig5b_bayesian_averaged_", timestamp, ".csv")
             if(!is.null(values$bayesian_result$averaged_network)) {
               strength_data <- values$bayesian_result$averaged_network
               write.csv(strength_data, figure5b_csv, row.names = TRUE)
@@ -5917,8 +5907,8 @@ server <- function(input, output, session) {
     req(values$bayesian_result)
     
     tryCatch({
-      # 获取网络分析的可视化配置（如果存在）
-      colors <- if(!is.null(values$colors)) values$colors else NULL
+      # 获取网络分析的可视化配置（使用组级别颜色）
+      colors <- if(!is.null(values$network_group_colors)) values$network_group_colors else NULL
       groups <- if(!is.null(values$variable_groups)) values$variable_groups else NULL
       layout <- if(!is.null(values$network_result) && !is.null(values$network_result$layout)) {
         values$network_result$layout
@@ -5929,8 +5919,8 @@ server <- function(input, output, session) {
       # 使用新的贝叶斯网络可视化函数
       bayesian_plot <- create_bayesian_network_plot(
         bayesian_result = values$bayesian_result,
-        colors = colors,
-        groups = groups,
+        colors = values$network_group_colors,  # 使用组级别颜色
+        groups = values$network_groups_by_index,  # 使用正确的索引格式分组
         layout = layout,
         title = "学习的贝叶斯网络结构"
       )
@@ -6116,10 +6106,11 @@ server <- function(input, output, session) {
       
       averaged_plot <- create_bayesian_network_plot(
         bayesian_result = values$bayesian_result,
-        colors = colors,
-        groups = groups,
+        colors = values$network_group_colors,  # 使用组级别颜色
+        groups = values$network_groups_by_index,  # 使用正确的索引格式分组
         layout = layout,
-        title = "Bootstrap平均网络 (稳定边)"
+        title = "Bootstrap平均网络 (稳定边)",
+        network_type = "averaged"  # 指定为平均网络，显示权重强度
       )
       
       if(!is.null(averaged_plot)) {
@@ -6346,8 +6337,8 @@ server <- function(input, output, session) {
               } else NULL
               create_bayesian_network_plot(
                 bayesian_result = values$bayesian_result,
-                colors = colors,
-                groups = groups,
+                colors = values$network_group_colors,  # 使用组级别颜色
+                groups = values$network_groups_by_index,  # 使用正确的索引格式分组
                 title = "Bayesian Network Structure"
               )
             } else {

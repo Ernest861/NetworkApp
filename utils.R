@@ -8,6 +8,241 @@ source("story_generator.R")
 source("scale_calculator.R")
 
 # =============================================================================
+# 数据预处理函数
+# =============================================================================
+
+#' 标准化性别变量
+#' 支持多种性别变量格式：1/2, 1/0, male/female, 男/女等
+#' @param gender_var 性别变量向量
+#' @param var_name 变量名（用于智能识别）
+#' @return 标准化后的性别变量（1=男性，2=女性）
+standardize_gender_variable <- function(gender_var, var_name = "") {
+  if(is.null(gender_var) || length(gender_var) == 0) {
+    return(gender_var)
+  }
+  
+  # 检查是否为性别相关变量
+  var_name_lower <- tolower(var_name)
+  is_gender_var <- any(grepl("gender|sex|性别|gender|male|female", var_name_lower, ignore.case = TRUE))
+  
+  # 如果不是性别变量，直接返回原变量
+  if(!is_gender_var) {
+    return(gender_var)
+  }
+  
+  cat("检测到性别变量:", var_name, "\n")
+  
+  # 移除缺失值进行分析
+  valid_values <- gender_var[!is.na(gender_var)]
+  unique_vals <- unique(valid_values)
+  
+  cat("原始唯一值:", paste(unique_vals, collapse = ", "), "\n")
+  
+  # 创建标准化后的变量
+  standardized_var <- gender_var
+  
+  # 如果是字符型变量
+  if(is.character(gender_var) || is.factor(gender_var)) {
+    gender_char <- as.character(gender_var)
+    gender_lower <- tolower(gender_char)
+    
+    # 男性的各种表示
+    male_patterns <- c("male", "m", "man", "boy", "男", "男性", "1")
+    # 女性的各种表示  
+    female_patterns <- c("female", "f", "woman", "girl", "女", "女性", "2")
+    
+    for(pattern in male_patterns) {
+      standardized_var[grepl(pattern, gender_lower, fixed = TRUE)] <- 1
+    }
+    for(pattern in female_patterns) {
+      standardized_var[grepl(pattern, gender_lower, fixed = TRUE)] <- 2
+    }
+    
+    # 转换为数值型
+    standardized_var <- as.numeric(standardized_var)
+    
+  } else if(is.numeric(gender_var)) {
+    # 数值型变量处理
+    if(length(unique_vals) == 2) {
+      sorted_vals <- sort(unique_vals)
+      
+      # 处理0/1编码 -> 1/2编码
+      if(all(sorted_vals == c(0, 1))) {
+        cat("检测到0/1编码，转换为1/2编码\n")
+        standardized_var[gender_var == 0] <- 1  # 0 -> 1 (男性)
+        standardized_var[gender_var == 1] <- 2  # 1 -> 2 (女性)
+      }
+      # 处理1/2编码（保持不变）
+      else if(all(sorted_vals == c(1, 2))) {
+        cat("检测到1/2编码，保持不变\n")
+        # 保持原样
+      }
+      # 其他数值编码，映射到最小值=1，最大值=2
+      else {
+        cat("检测到其他数值编码，映射为1/2\n")
+        min_val <- min(sorted_vals)
+        max_val <- max(sorted_vals)
+        standardized_var[gender_var == min_val] <- 1
+        standardized_var[gender_var == max_val] <- 2
+      }
+    }
+  }
+  
+  # 验证结果
+  final_unique <- unique(standardized_var[!is.na(standardized_var)])
+  cat("标准化后唯一值:", paste(final_unique, collapse = ", "), "\n")
+  
+  # 确保只有1和2两个值
+  if(!all(final_unique %in% c(1, 2))) {
+    warning("性别变量标准化后仍有异常值，可能影响分组分析")
+  }
+  
+  return(standardized_var)
+}
+
+# =============================================================================
+# 统一网络配置函数
+# =============================================================================
+
+#' 创建统一的网络参数配置
+#' @param stored_colors 保存的颜色信息
+#' @param stored_groups 保存的分组信息  
+#' @param stored_layout 保存的布局信息
+#' @param network_type 网络类型
+#' @return 统一的网络参数配置
+create_unified_network_params <- function(stored_colors = NULL, stored_groups = NULL, stored_layout = NULL, network_type = "main") {
+  # 统一配色方案
+  unified_colors <- if(!is.null(stored_colors)) {
+    stored_colors
+  } else {
+    c("#1ba784","#63bbd0","#f87599","#fed71a",
+      "#d1c2d3","#304fb0","#c6dfc8","#a8456b","#2486b9",
+      "#e16c96","#fc8c23","#280c1c",
+      "#fbb957","#de1c31","#ee3f4d",
+      "#c0c4c3","#c6e6e8",
+      "#12a182","#eb3c70","#eaad1a","#45b787","#d11a2d",
+      "#eea08c","#cfccc9",
+      "#2b1216","#61649f","#93b5cf","#c4cbcf",
+      "#c4d7d6","#248067","#fbda41","#f1f0ed")
+  }
+  
+  # 统一边颜色
+  unified_edge_colors <- list(
+    posCol = c("#2376b7", "#134857"),
+    negCol = c("#d2568c", "#62102e")
+  )
+  
+  return(list(
+    colors = unified_colors,
+    groups = stored_groups,
+    layout = stored_layout,
+    edge_colors = unified_edge_colors
+  ))
+}
+
+# =============================================================================
+# 贝叶斯网络可视化函数
+# =============================================================================
+
+#' 创建贝叶斯网络图
+#' @param bayesian_result 贝叶斯分析结果
+#' @param colors 颜色配置
+#' @param groups 分组信息
+#' @param layout 布局信息
+#' @param title 图标题
+#' @param network_type 网络类型
+#' @return 贝叶斯网络图
+create_bayesian_network_plot <- function(bayesian_result, colors = NULL, groups = NULL, layout = NULL, title = "Bayesian Network", network_type = "structure") {
+  # 使用您指定的确切配色方案
+  zcolor <- c("#63bbd0","#f87599","#f1f0ed","#fc8c23","#1ba784","#63bbd0","#f87599","#fed71a",
+              "#d1c2d3","#304fb0","#c6dfc8","#a8456b","#2486b9",
+              "#e16c96","#fc8c23","#280c1c",
+              "#fbb957","#de1c31","#ee3f4d",
+              "#c0c4c3","#c6e6e8",
+              "#12a182","#eb3c70","#eaad1a","#45b787","#d11a2d",
+              "#eea08c","#cfccc9",
+              "#2b1216","#61649f","#93b5cf","#c4cbcf",
+              "#c4d7d6","#248067","#fbda41","#f1f0ed")
+  
+  zposCol <- c("#2376b7","#134857") 
+  znegCol <- c("#d2568c","#62102e")
+  
+  # 构建基础参数 - 严格按照您的模板
+  args <- list(
+    threshold = 0.05,
+    edge.labels = TRUE,
+    posCol = zposCol,
+    negCol = znegCol,
+    color = if(!is.null(colors)) colors else zcolor,
+    legend = TRUE,
+    legend.cex = 0.4,
+    vsize = 6,
+    esize = 5,
+    asize = 5,
+    edge.label.cex = 1,
+    title = title
+  )
+  
+  # 添加分组信息
+  if(!is.null(groups)) {
+    # 将分组信息转换为变量对应的组名
+    variable_names <- names(bayesian_result$data)
+    group_assignment <- rep("未分组", length(variable_names))
+    names(group_assignment) <- variable_names
+    
+    # 为每个变量分配组名
+    for(group_name in names(groups)) {
+      scales_in_group <- groups[[group_name]]
+      for(scale_name in scales_in_group) {
+        # 找到属于这个量表的变量
+        matching_vars <- variable_names[
+          startsWith(variable_names, paste0(scale_name, "_")) |
+          grepl(paste0("_", scale_name, "_"), variable_names) |
+          endsWith(variable_names, paste0("_", scale_name)) |
+          variable_names == scale_name
+        ]
+        group_assignment[matching_vars] <- group_name
+      }
+    }
+    args$groups <- group_assignment
+  }
+  
+  if(network_type == "averaged") {
+    # 平均网络：显示权重强度
+    if(!is.null(bayesian_result$stable_edges) && nrow(bayesian_result$stable_edges) > 0) {
+      # 构建邻接矩阵
+      variable_names <- names(bayesian_result$data)
+      n_vars <- length(variable_names)
+      adj_matrix <- matrix(0, n_vars, n_vars)
+      rownames(adj_matrix) <- colnames(adj_matrix) <- variable_names
+      
+      stable_edges <- bayesian_result$stable_edges
+      for(i in 1:nrow(stable_edges)) {
+        from_var <- stable_edges$from[i]
+        to_var <- stable_edges$to[i]
+        strength <- stable_edges$strength[i]
+        
+        from_idx <- which(variable_names == from_var)
+        to_idx <- which(variable_names == to_var)
+        if(length(from_idx) > 0 && length(to_idx) > 0) {
+          adj_matrix[from_idx, to_idx] <- strength
+        }
+      }
+      
+      args$data <- adj_matrix
+      args$input <- "adjacency"
+    }
+  } else {
+    # 结构网络：仅显示连接
+    args$data <- bayesian_result$data
+  }
+  
+  # 调用quickNet
+  network_result <- do.call(quickNet::quickNet, args)
+  return(network_result)
+}
+
+# =============================================================================
 # 数据解析和验证函数
 # =============================================================================
 
@@ -335,58 +570,47 @@ preprocess_data <- function(data, remove_outliers = FALSE) {
 #' @param edge_labels 是否显示边标签
 #' @param colors 颜色配置
 #' @return 网络分析结果
-safe_network_analysis <- function(data, threshold = 0.05, edge_labels = TRUE, colors = NULL, groups = NULL, shape = NULL, title = NULL, ...) {
+safe_network_analysis <- function(data, threshold = 0.05, edge_labels = TRUE, colors = NULL, groups = NULL, shape = NULL, title = NULL, layout = NULL, vsize = NULL, ...) {
+  # 使用您指定的确切配色方案
+  zcolor <- c("#63bbd0","#f87599","#f1f0ed","#fc8c23","#1ba784","#63bbd0","#f87599","#fed71a",
+              "#d1c2d3","#304fb0","#c6dfc8","#a8456b","#2486b9",
+              "#e16c96","#fc8c23","#280c1c",
+              "#fbb957","#de1c31","#ee3f4d",
+              "#c0c4c3","#c6e6e8",
+              "#12a182","#eb3c70","#eaad1a","#45b787","#d11a2d",
+              "#eea08c","#cfccc9",
+              "#2b1216","#61649f","#93b5cf","#c4cbcf",
+              "#c4d7d6","#248067","#fbda41","#f1f0ed")
   
-  # 数据检查
-  data <- na.omit(data)
+  zposCol <- c("#2376b7","#134857") 
+  znegCol <- c("#d2568c","#62102e")
   
-  if(nrow(data) < 30) {
-    stop("样本量不足：需要至少30个有效观测值")
-  }
+  # 构建quickNet参数 - 严格按照您的模板
+  args <- list(
+    data = data,
+    threshold = threshold,
+    edge.labels = edge_labels,
+    posCol = zposCol,
+    negCol = znegCol,
+    color = if(!is.null(colors)) colors else zcolor,
+    legend = TRUE,
+    legend.cex = 0.4,
+    vsize = if(!is.null(vsize)) vsize else 6,
+    esize = 5,
+    asize = 5,
+    edge.label.cex = 1
+  )
   
-  if(ncol(data) < 2) {
-    stop("变量不足：需要至少2个变量")
-  }
+  # 添加其他参数
+  if(!is.null(groups)) args$groups <- groups
+  if(!is.null(shape)) args$shape <- shape
+  if(!is.null(title)) args$title <- title
+  if(!is.null(layout)) args$layout <- layout
+  args <- c(args, list(...))
   
-  # 检查变量方差
-  var_check <- sapply(data, function(x) var(x, na.rm = TRUE))
-  zero_var_cols <- names(var_check)[var_check == 0 | is.na(var_check)]
-  
-  if(length(zero_var_cols) > 0) {
-    warning("以下变量方差为0，已移除：", paste(zero_var_cols, collapse = ", "))
-    data <- data[, !names(data) %in% zero_var_cols, drop = FALSE]
-  }
-  
-  # 设置颜色
-  if(is.null(colors)) {
-    colors <- VIZ_CONFIG$colors$primary[1:min(ncol(data), length(VIZ_CONFIG$colors$primary))]
-  }
-  
-  # 执行网络分析
-  tryCatch({
-    # 构建quickNet参数
-    args <- list(
-      data = data,
-      threshold = threshold,
-      edge.labels = edge_labels,
-      posCol = VIZ_CONFIG$colors$positive_edges,
-      negCol = VIZ_CONFIG$colors$negative_edges,
-      color = colors
-    )
-    
-    # 添加桥接网络分析参数
-    if(!is.null(groups)) args$groups <- groups
-    if(!is.null(shape)) args$shape <- shape
-    if(!is.null(title)) args$title <- title
-    
-    # 添加其他参数
-    args <- c(args, list(...))
-    
-    network_result <- do.call(quickNet, args)
-    return(network_result)
-  }, error = function(e) {
-    stop(paste("网络分析失败：", e$message))
-  })
+  # 调用quickNet
+  network_result <- do.call(quickNet::quickNet, args)
+  return(network_result)
 }
 
 #' 生成网络分析报告
@@ -437,6 +661,70 @@ generate_network_report <- function(network_result, centrality_result = NULL, da
   )
   
   return(report_html)
+}
+
+# =============================================================================
+# 统一网络可视化配置函数
+# =============================================================================
+
+#' 创建统一的网络可视化参数
+#' @param stored_colors 保存的配色方案
+#' @param stored_groups 保存的分组信息
+#' @param stored_layout 保存的布局信息
+#' @param network_type 网络类型 ("main", "bridge", "compare", "bayesian")
+#' @return 统一的可视化参数列表
+create_unified_network_params <- function(stored_colors = NULL, stored_groups = NULL, stored_layout = NULL, network_type = "main") {
+  
+  # 统一的配色方案
+  unified_colors <- if(!is.null(stored_colors)) {
+    stored_colors
+  } else {
+    # 使用标准配色 - 参考用户提供的zcolor
+    c("#1ba784","#63bbd0","#f87599","#fed71a",
+      "#d1c2d3","#304fb0","#c6dfc8","#a8456b","#2486b9",
+      "#e16c96","#fc8c23","#280c1c",
+      "#fbb957","#de1c31","#ee3f4d",
+      "#c0c4c3","#c6e6e8",
+      "#12a182","#eb3c70","#eaad1a","#45b787","#d11a2d",
+      "#eea08c","#cfccc9",
+      "#2b1216","#61649f","#93b5cf","#c4cbcf",
+      "#c4d7d6","#248067","#fbda41","#f1f0ed")
+  }
+  
+  # 统一的qgraph参数
+  unified_params <- list(
+    colors = unified_colors,
+    groups = stored_groups,
+    layout = stored_layout,
+    
+    # 统一的边颜色（参考用户代码）
+    posCol = c("#2376b7", "#134857"),
+    negCol = c("#d2568c", "#62102e"),
+    
+    # 统一的显示参数
+    label.cex = 1.1,
+    vsize = 6,
+    esize = 5,
+    asize = 5,
+    edge.label.cex = 1,
+    legend = TRUE,
+    legend.cex = 0.4,
+    GLratio = 7,
+    layoutOffset = c(0.03, 0)
+  )
+  
+  # 根据网络类型调整特定参数
+  if(network_type == "bridge") {
+    # 桥接网络的特殊配置
+    unified_params$vsize <- 6
+    unified_params$edge.labels <- TRUE
+  } else if(network_type == "bayesian") {
+    # 贝叶斯网络的特殊配置
+    unified_params$directed <- TRUE
+    unified_params$arrows <- TRUE
+  }
+  
+  return(unified_params)
 }
 
 # =============================================================================
@@ -513,7 +801,7 @@ export_analysis_results <- function(network_result, centrality_result = NULL,
 #' 获取中心性图
 #' @param centrality_result 中心性结果
 #' @return ggplot对象或plot输出
-get_centrality_plot <- function(centrality_result) {
+get_centrality_plot <- function(centrality_result, prefix = "centrality", path = ".", device = "pdf", width = 6, height = 4.5, ...) {
   if(is.null(centrality_result)) {
     return(NULL)
   }
@@ -572,6 +860,13 @@ get_centrality_plot <- function(centrality_result) {
       }
     })
   })
+}
+
+#' 为Web显示的中心性图函数
+#' @param centrality_result 中心性结果
+#' @return 无返回值，直接绘制图形
+plot_centrality_for_display <- function(centrality_result) {
+  quickNet::get_centrality_plot(centrality_result)
 }
 
 #' 获取组间比较图
@@ -1240,11 +1535,30 @@ create_bayesian_network_plot <- function(bayesian_result,
   
   if(use_weights && network_type == "averaged") {
     # Figure5b: 平均网络，显示权重强度
-    if(is.matrix(network_to_plot) || is.data.frame(network_to_plot)) {
-      # 如果是强度矩阵，直接使用
-      adj_matrix <- as.matrix(network_to_plot)
-      if(nrow(adj_matrix) == n_vars && ncol(adj_matrix) == n_vars) {
-        rownames(adj_matrix) <- colnames(adj_matrix) <- variable_names
+    # 使用稳定边构建有向无环图
+    if(!is.null(bayesian_result$stable_edges) && nrow(bayesian_result$stable_edges) > 0) {
+      stable_edges <- bayesian_result$stable_edges
+      for(i in 1:nrow(stable_edges)) {
+        from_var <- stable_edges$from[i]
+        to_var <- stable_edges$to[i]
+        strength <- stable_edges$strength[i]  # 使用稳定边的强度
+        
+        from_idx <- which(variable_names == from_var)
+        to_idx <- which(variable_names == to_var)
+        if(length(from_idx) > 0 && length(to_idx) > 0) {
+          adj_matrix[from_idx, to_idx] <- strength
+        }
+      }
+    } else if(!is.null(network_to_plot$arcs)) {
+      # 备用方案：使用平均网络的边结构
+      arcs <- network_to_plot$arcs
+      for(i in 1:nrow(arcs)) {
+        from_idx <- which(variable_names == arcs[i, "from"])
+        to_idx <- which(variable_names == arcs[i, "to"])
+        if(length(from_idx) > 0 && length(to_idx) > 0) {
+          # 对于平均网络，权重设为1（因为没有强度信息）
+          adj_matrix[from_idx, to_idx] <- 1
+        }
       }
     }
   } else {
@@ -1291,7 +1605,7 @@ create_bayesian_network_plot <- function(bayesian_result,
       color = colors,
       directed = TRUE,  # 贝叶斯网络是有向图
       arrows = TRUE,
-      edge.labels = FALSE,  # 贝叶斯网络不显示边权重
+      edge.labels = (network_type == "averaged"),  # 平均网络显示权重，结构图不显示
       edge.label.cex = 0.8,
       vsize = 8,
       esize = 5,
