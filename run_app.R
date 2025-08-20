@@ -98,7 +98,7 @@ APP_CONFIG <- list(
   port = 3838,         # 默认端口
   
   # 应用设置  
-  max_file_size = 30,  # MB
+  max_file_size = 100,  # MB
   session_timeout = 3600  # 秒
 )
 

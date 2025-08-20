@@ -2327,35 +2327,39 @@ extract_network_metrics <- function(models) {
       params <- psychonetrics::parameters(model)
       
       # 计算温度 T = 1/β (参考zTemperature.R第84行)
-      cat("🔍 调试模型", model_name, "的温度计算...\n")
-      cat("  parameters表列名:", paste(names(params), collapse = ", "), "\n")
-      cat("  parameters表前5行:\n")
-      print(head(params, 5))
+      cat("🔍 调试模型", model_name, "的网络指标计算...\n")
       
-      # 检查各种可能的列名和方法
+      # 检查各种可能的列名和方法提取beta参数
       beta_params <- c()
       
       if("matrix" %in% names(params)) {
         # 方法1: 使用matrix列 (参考calculate_temperature.R第178行)
         beta_params <- params[params$matrix == "beta", "est"]
-        cat("  使用params$matrix找到beta参数数量:", length(beta_params), "\n")
+        cat("  找到beta参数数量:", length(beta_params), "\n")
       }
       
       if(length(beta_params) == 0 && "param" %in% names(params)) {
         # 方法2: 使用param列
         beta_params <- params[params$param == "beta", "est"]
-        cat("  使用params$param找到beta参数数量:", length(beta_params), "\n")
+        cat("  找到beta参数数量:", length(beta_params), "\n")
       }
       
       if(length(beta_params) == 0 && "par" %in% names(params)) {
         # 方法3: 使用par列
         beta_params <- params[params$par == "beta", "est"]
-        cat("  使用params$par找到beta参数数量:", length(beta_params), "\n")
+        cat("  找到beta参数数量:", length(beta_params), "\n")
       }
       
-      if(length(beta_params) == 0) {
-        cat("  所有方法都未找到beta参数\n")
-      }
+      # 提取omega(边权重)和tau(阈值)矩阵用于计算其他网络指标
+      omega_matrices <- NULL
+      tau_matrices <- NULL
+      
+      tryCatch({
+        omega_matrices <- psychonetrics::getmatrix(model, "omega")
+        tau_matrices <- psychonetrics::getmatrix(model, "tau")
+      }, error = function(e) {
+        cat("  提取omega/tau矩阵失败:", e$message, "\n")
+      })
       
       if(length(beta_params) > 0) {
         # 处理beta参数可能是list的情况
@@ -2392,29 +2396,195 @@ extract_network_metrics <- function(models) {
       }
       
       # 计算连接度
-      omega_matrix <- psychonetrics::getmatrix(model, "omega")
-      if(is.list(omega_matrix)) {
+      if(is.list(omega_matrices)) {
         # 多组情况，取第一组
-        omega_matrix <- omega_matrix[[1]]
+        omega_matrix <- omega_matrices[[1]]
+      } else {
+        omega_matrix <- omega_matrices
       }
-      connectivity <- sum(abs(omega_matrix[upper.tri(omega_matrix)]))
       
-      # 计算密度
-      n_nodes <- nrow(omega_matrix)
-      max_edges <- n_nodes * (n_nodes - 1) / 2
-      density <- sum(omega_matrix[upper.tri(omega_matrix)] != 0) / max_edges
+      connectivity <- NA
+      density <- NA
+      global_strength <- NA
+      entropy <- NA
+      clustering <- NA
       
-      # 拟合指标
-      fit_info <- psychonetrics::fit(model)
+      if(!is.null(omega_matrix) && is.matrix(omega_matrix)) {
+        # 计算连接度 (参考temperature_sensitivity.R)
+        connectivity <- sum(abs(omega_matrix[upper.tri(omega_matrix)]))
+        
+        # 计算密度
+        n_nodes <- nrow(omega_matrix)
+        max_edges <- n_nodes * (n_nodes - 1) / 2
+        density <- sum(omega_matrix[upper.tri(omega_matrix)] != 0) / max_edges
+        
+        # 计算全局强度 (参考temperature_sensitivity.R 第88-96行)
+        global_strength <- sum(abs(omega_matrix)) / 2  # 除以2避免重复计算
+        
+        # 计算网络熵 (如果IsingSampler包可用)
+        if(requireNamespace("IsingSampler", quietly = TRUE) && 
+           !is.null(tau_matrices) && length(beta_values) > 0) {
+          tryCatch({
+            tau_matrix <- if(is.list(tau_matrices)) tau_matrices[[1]] else tau_matrices
+            if(is.matrix(tau_matrix) || is.vector(tau_matrix)) {
+              # 确保omega矩阵对称
+              if (!isSymmetric(omega_matrix)) {
+                omega_matrix <- (omega_matrix + t(omega_matrix)) / 2
+              }
+              # 使用平均beta值计算熵
+              entropy <- IsingSampler::IsingEntrophy(
+                graph = omega_matrix, 
+                thresholds = as.vector(tau_matrix), 
+                beta = mean(beta_values, na.rm = TRUE)
+              )
+            }
+          }, error = function(e) {
+            cat("  计算网络熵失败:", e$message, "\n")
+          })
+        }
+        
+        # 计算聚类系数 (如果igraph包可用)
+        if(requireNamespace("igraph", quietly = TRUE)) {
+          tryCatch({
+            # 创建igraph对象
+            g <- igraph::graph_from_adjacency_matrix(
+              abs(omega_matrix) > 0.01,  # 设置边的阈值
+              mode = "undirected"
+            )
+            clustering <- igraph::transitivity(g, type = "global")
+          }, error = function(e) {
+            cat("  计算聚类系数失败:", e$message, "\n")
+          })
+        }
+      }
+      
+      # 拟合指标 - 使用更直接的方法
+      model_BIC <- NA
+      model_AIC <- NA
+      model_CFI <- NA
+      model_RMSEA <- NA
+      
+      # 方法1: 直接从模型对象获取拟合指标
+      tryCatch({
+        cat("  调试: 检查model@fitmeasures可用指标:", paste(names(model@fitmeasures), collapse = ", "), "\n")
+        
+        # 尝试多种大小写组合
+        bic_names <- c("BIC", "bic", "Bic")
+        aic_names <- c("AIC", "aic", "Aic")
+        cfi_names <- c("CFI", "cfi", "Cfi")
+        rmsea_names <- c("RMSEA", "rmsea", "Rmsea")
+        
+        for(name in bic_names) {
+          if(name %in% names(model@fitmeasures) && is.na(model_BIC)) {
+            model_BIC <- model@fitmeasures[[name]]
+            cat("  找到BIC (", name, "):", model_BIC, "\n")
+            break
+          }
+        }
+        
+        for(name in aic_names) {
+          if(name %in% names(model@fitmeasures) && is.na(model_AIC)) {
+            model_AIC <- model@fitmeasures[[name]]
+            cat("  找到AIC (", name, "):", model_AIC, "\n")
+            break
+          }
+        }
+        
+        for(name in cfi_names) {
+          if(name %in% names(model@fitmeasures) && is.na(model_CFI)) {
+            model_CFI <- model@fitmeasures[[name]]
+            cat("  找到CFI (", name, "):", model_CFI, "\n")
+            break
+          }
+        }
+        
+        for(name in rmsea_names) {
+          if(name %in% names(model@fitmeasures) && is.na(model_RMSEA)) {
+            model_RMSEA <- model@fitmeasures[[name]]
+            cat("  找到RMSEA (", name, "):", model_RMSEA, "\n")
+            break
+          }
+        }
+      }, error = function(e) {
+        cat("  从 model@fitmeasures提取失败:", e$message, "\n")
+      })
+      
+      # 方法2: 使用fit函数
+      if(is.na(model_BIC) || is.na(model_AIC)) {
+        tryCatch({
+          fit_info <- psychonetrics::fit(model)
+          if(!is.null(fit_info)) {
+            if(is.na(model_BIC) && "BIC" %in% names(fit_info)) {
+              model_BIC <- fit_info$BIC
+            }
+            if(is.na(model_AIC) && "AIC" %in% names(fit_info)) {
+              model_AIC <- fit_info$AIC
+            }
+            if(is.na(model_CFI) && "CFI" %in% names(fit_info)) {
+              model_CFI <- fit_info$CFI
+            }
+            if(is.na(model_RMSEA) && "RMSEA" %in% names(fit_info)) {
+              model_RMSEA <- fit_info$RMSEA
+            }
+          }
+        }, error = function(e) {
+          cat("  使用fit函数提取失败:", e$message, "\n")
+        })
+      }
+      
+      # 方法3: 使用logLik和AIC/BIC函数直接计算
+      if(is.na(model_BIC) || is.na(model_AIC)) {
+        cat("  尝试直接使用AIC/BIC函数...\n")
+        tryCatch({
+          if(is.na(model_AIC)) {
+            model_AIC <- AIC(model)
+            cat("    使用AIC()函数得到:", model_AIC, "\n")
+          }
+          if(is.na(model_BIC)) {
+            model_BIC <- BIC(model)
+            cat("    使用BIC()函数得到:", model_BIC, "\n")
+          }
+        }, error = function(e) {
+          cat("  直接使用AIC/BIC函数失败:", e$message, "\n")
+        })
+      }
+      
+      # 方法4: 尝试使用比较结果（如果有的话）
+      if(is.na(model_BIC) || is.na(model_AIC)) {
+        cat("  BIC和AIC仍然为NA，尝试最后一种方法...\n")
+        tryCatch({
+          # 尝试使用比较函数的结果
+          temp_compare <- psychonetrics::compare(model)
+          if(!is.null(temp_compare)) {
+            cat("    compare结果列名:", paste(names(temp_compare), collapse = ", "), "\n")
+            if(is.na(model_BIC) && "BIC" %in% names(temp_compare)) {
+              model_BIC <- temp_compare$BIC[1]
+              cat("    从compare结果找到BIC:", model_BIC, "\n")
+            }
+            if(is.na(model_AIC) && "AIC" %in% names(temp_compare)) {
+              model_AIC <- temp_compare$AIC[1]
+              cat("    从compare结果找到AIC:", model_AIC, "\n")
+            }
+          }
+        }, error = function(e) {
+          cat("  使用compare方法失败:", e$message, "\n")
+        })
+      }
+      
+      cat("  最终BIC值:", model_BIC, ", AIC值:", model_AIC, "\n")
       
       metrics[[model_name]] <- list(
         temperature = temperature,
         connectivity = connectivity,
         density = density,
-        AIC = fit_info$AIC,
-        BIC = fit_info$BIC,
-        CFI = fit_info$CFI %||% NA,
-        RMSEA = fit_info$RMSEA %||% NA
+        global_strength = global_strength,
+        entropy = entropy,
+        clustering = clustering,
+        AIC = model_AIC,
+        BIC = model_BIC,
+        CFI = model_CFI,
+        RMSEA = model_RMSEA,
+        n_nodes = if(!is.null(omega_matrix)) nrow(omega_matrix) else NA
       )
       
     }, error = function(e) {
@@ -2471,21 +2641,63 @@ compare_ising_models <- function(models) {
     cat("⚠️ 模型比较失败:", e$message, "\n")
     cat("  错误详细信息:", toString(e), "\n")
     
-    # 手动计算AIC/BIC比较
+    # 手动计算AIC/BIC比较 - 使用改进的提取方法
     cat("  使用手动方法计算模型比较...\n")
-    aic_values <- tryCatch({
-      sapply(models, function(m) psychonetrics::fit(m)$AIC)
-    }, error = function(e2) {
-      cat("    AIC计算失败:", e2$message, "\n")
-      rep(NA, length(models))
-    })
     
-    bic_values <- tryCatch({
-      sapply(models, function(m) psychonetrics::fit(m)$BIC)
-    }, error = function(e2) {
-      cat("    BIC计算失败:", e2$message, "\n")
-      rep(NA, length(models))
-    })
+    # 定义BIC提取函数
+    get_model_BIC <- function(model) {
+      bic_val <- NA
+      tryCatch({
+        bic_val <- BIC(model)
+      }, error = function(e) {
+        tryCatch({
+          if("BIC" %in% names(model@fitmeasures)) {
+            bic_val <- model@fitmeasures$BIC
+          }
+        }, error = function(e2) {
+          tryCatch({
+            fit_info <- psychonetrics::fit(model)
+            if(!is.null(fit_info) && "BIC" %in% names(fit_info)) {
+              bic_val <- fit_info$BIC
+            }
+          }, error = function(e3) {})
+        })
+      })
+      return(bic_val)
+    }
+    
+    # 定义AIC提取函数
+    get_model_AIC <- function(model) {
+      aic_val <- NA
+      tryCatch({
+        aic_val <- AIC(model)
+      }, error = function(e) {
+        tryCatch({
+          if("AIC" %in% names(model@fitmeasures)) {
+            aic_val <- model@fitmeasures$AIC
+          }
+        }, error = function(e2) {
+          tryCatch({
+            fit_info <- psychonetrics::fit(model)
+            if(!is.null(fit_info) && "AIC" %in% names(fit_info)) {
+              aic_val <- fit_info$AIC
+            }
+          }, error = function(e3) {})
+        })
+      })
+      return(aic_val)
+    }
+    
+    aic_values <- sapply(models, get_model_AIC)
+    bic_values <- sapply(models, get_model_BIC)
+    
+    cat("  AIC值:", paste(names(aic_values), "=", round(aic_values, 2), collapse = ", "), "\n")
+    cat("  BIC值:", paste(names(bic_values), "=", round(bic_values, 2), collapse = ", "), "\n")
+    
+    if(all(is.na(bic_values))) {
+      cat("    所有BIC值都是NA，返回第一个模型...\n")
+      return(list(best_model = names(models)[1], comparison_table = NULL))
+    }
     
     best_model <- names(which.min(bic_values))
     
@@ -2558,4 +2770,583 @@ generate_temperature_summary <- function(metrics, comparison, group_var) {
 }
 
 # 辅助函数：处理NULL值
-`%||%` <- function(x, y) if(is.null(x)) y else x
+`%||%` <- function(x, y) if(is.null(x)) y else x################################################################################
+########################## 代码生成和导出功能 ############################## 
+################################################################################
+
+# 初始化代码记录器
+init_code_recorder <- function() {
+  list(
+    data_loading = c(),
+    data_preprocessing = c(),
+    network_analysis = c(),
+    temperature_analysis = c(),
+    visualization = c(),
+    exports = c(),
+    parameters = list(),
+    session_info = list(
+      timestamp = Sys.time(),
+      user_selections = list()
+    )
+  )
+}
+
+# 添加代码记录
+add_code_record <- function(recorder, section, code_lines, description = "") {
+  if(is.null(recorder)) recorder <- init_code_recorder()
+  
+  # 添加时间戳和描述
+  if(description != "") {
+    code_lines <- c(paste0("# ", description, " [", format(Sys.time(), "%H:%M:%S"), "]"), code_lines)
+  }
+  
+  # 如果section不存在，创建它；如果存在，追加代码
+  if(section %in% names(recorder)) {
+    recorder[[section]] <- c(recorder[[section]], "", code_lines)
+  } else {
+    recorder[[section]] <- code_lines
+  }
+  
+  return(recorder)
+}
+
+# 记录数据加载代码
+record_data_loading <- function(recorder, file_path, sheet_name = NULL) {
+  code_lines <- c(
+    "# ===== 数据加载 Data Loading =====",
+    "library(readxl)",
+    "library(dplyr)",
+    "library(psychonetrics)  # 网络温度分析",
+    ""
+  )
+  
+  if(!is.null(sheet_name)) {
+    code_lines <- c(code_lines,
+      paste0('raw_data <- readxl::read_excel("', basename(file_path), '", sheet = "', sheet_name, '")')
+    )
+  } else {
+    code_lines <- c(code_lines,
+      paste0('raw_data <- readxl::read_excel("', basename(file_path), '")')
+    )
+  }
+  
+  code_lines <- c(code_lines,
+    "print(dim(raw_data))",
+    "print(head(raw_data, 3))"
+  )
+  
+  add_code_record(recorder, "data_loading", code_lines, "数据加载阶段")
+}
+
+# 记录数据预处理代码  
+record_data_preprocessing <- function(recorder, final_variables, binary_transform, binary_encoding, group_var = NULL) {
+  code_lines <- c(
+    "# ===== 数据预处理 Data Preprocessing =====",
+    "",
+    "# 选择分析变量",
+    paste0('analysis_vars <- c(', paste0('"', final_variables, '"', collapse = ', '), ')'),
+    ""
+  )
+  
+  if(!is.null(group_var)) {
+    code_lines <- c(code_lines,
+      "# 添加分组变量",
+      paste0('group_var <- "', group_var, '"'),
+      'analysis_data <- raw_data[, c(analysis_vars, group_var)]',
+      ""
+    )
+  } else {
+    code_lines <- c(code_lines,
+      'analysis_data <- raw_data[, analysis_vars]',
+      ""
+    )
+  }
+  
+  code_lines <- c(code_lines,
+    "# 处理缺失值",
+    'analysis_data <- analysis_data[complete.cases(analysis_data), ]',
+    'print(paste("最终数据行数:", nrow(analysis_data)))',
+    ""
+  )
+  
+  # 添加二值化代码
+  if(binary_transform != "无") {
+    code_lines <- c(code_lines,
+      paste0('# 二值化方法: ', binary_transform),
+      'for(var in analysis_vars) {',
+      '  if(is.numeric(analysis_data[[var]])) {'    
+    )
+    
+    if(binary_transform == "中位数分割") {
+      code_lines <- c(code_lines,
+        '    median_val <- median(analysis_data[[var]], na.rm = TRUE)',
+        '    analysis_data[[var]] <- ifelse(analysis_data[[var]] > median_val, 1, 0)'
+      )
+    } else if(binary_transform == "均值分割") {
+      code_lines <- c(code_lines,
+        '    mean_val <- mean(analysis_data[[var]], na.rm = TRUE)', 
+        '    analysis_data[[var]] <- ifelse(analysis_data[[var]] > mean_val, 1, 0)'
+      )
+    }
+    
+    code_lines <- c(code_lines,
+      '  }',
+      '}',
+      ""
+    )
+    
+    # 添加编码转换
+    if(binary_encoding == "-1/1编码") {
+      code_lines <- c(code_lines,
+        '# 转换为-1/1编码',
+        'for(var in analysis_vars) {',
+        '  analysis_data[[var]] <- ifelse(analysis_data[[var]] == 0, -1, 1)',
+        '}',
+        ""
+      )
+    }
+  }
+  
+  add_code_record(recorder, "data_preprocessing", code_lines, "数据预处理阶段")
+}
+
+# 实时记录实际执行的代码
+record_actual_code <- function(recorder, code_lines, section_name, description = NULL) {
+  if(is.null(recorder)) {
+    recorder <- init_code_recorder()
+  }
+  
+  # 添加时间戳
+  timestamp_line <- paste("# [", Sys.time(), "]", description %||% section_name)
+  code_lines <- c(timestamp_line, code_lines, "")
+  
+  # 返回更新后的recorder
+  return(add_code_record(recorder, section_name, code_lines, description %||% section_name))
+}
+
+# 记录网络分析代码
+record_network_analysis <- function(recorder, final_variables, threshold = 0.05, groups = NULL, estimator = "EBICglasso") {
+  code_lines <- c(
+    "# ===== 网络分析 Network Analysis =====",
+    "library(quickNet)   # 网络建构包",
+    "library(bootnet)    # 稳定性分析",
+    "library(qgraph)     # 网络可视化",
+    "",
+    "# 数据准备",
+    "analysis_data <- analysis_data[complete.cases(analysis_data), ]",
+    'print(paste("完整样本数量:", nrow(analysis_data)))',
+    'print(paste("分析变量数量:", ncol(analysis_data)))',
+    "",
+    "# 网络建构参数",
+    paste0('threshold <- ', threshold),
+    paste0('estimator <- "', estimator, '"'),
+    ""
+  )
+  
+  if(!is.null(groups) && length(groups) > 1) {
+    code_lines <- c(code_lines,
+      "# 分组信息设置",
+      paste0('groups <- c(', paste(sapply(1:length(final_variables), function(i) {
+        group_idx <- which(sapply(groups, function(g) i %in% g))[1]
+        if(is.na(group_idx)) 1 else group_idx
+      }), collapse = ', '), ')'),
+      paste0('group_colors <- c(', paste0('"', c("#E31A1C", "#1F78B4", "#33A02C", "#FF7F00", "#6A3D9A")[1:length(groups)], '"', collapse = ', '), ')'),
+      ""
+    )
+  }
+  
+  # 根据估计方法生成不同的代码
+  if(estimator == "EBICglasso") {
+    code_lines <- c(code_lines,
+      "# 使用quickNet进行网络分析（默认EBICglasso）",
+      "network_result <- quickNet(",
+      "  data = analysis_data,",
+      paste0('  threshold = ', threshold, ','),
+      "  layout = 'spring',",
+      "  edge.labels = TRUE,",
+      "  theme = 'colorblind'"
+    )
+  } else {
+    code_lines <- c(code_lines,
+      paste0("# 使用bootnet进行网络估计（", estimator, "）"),
+      paste0("net_estimate <- estimateNetwork(analysis_data, default = '", estimator, "', threshold = TRUE)"),
+      "",
+      "# 使用qgraph进行可视化",
+      "network_result <- qgraph(",
+      "  net_estimate$graph,",
+      "  layout = 'spring',",
+      "  edge.labels = TRUE,",
+      paste0('  threshold = ', threshold, ','),
+      "  theme = 'colorblind'"
+    )
+  }
+  
+  # 添加分组参数（如果有的话）
+  if(!is.null(groups) && length(groups) > 1) {
+    code_lines <- c(code_lines,
+      "  , groups = groups,",
+      "  color = group_colors"
+    )
+  }
+  
+  # 结束函数调用
+  code_lines <- c(code_lines,
+    ")",
+    "",
+    "# 显示网络结果",
+    "print(network_result)",
+    "",
+    "# 中心性分析",
+    "centrality_result <- Centrality(network_result)",
+    "print(centrality_result)",
+    "",
+    "# 专业网络图输出（PDF格式）",
+    "get_network_plot(network_result, prefix = 'Fig1_network', width = 6, height = 4.5)",
+    "cat('已生成网络图: Fig1_network_network_plot.pdf\\n')",
+    "",
+    "# 中心性可视化（PDF格式）", 
+    "get_centrality_plot(centrality_result, prefix = 'Fig2_centrality', width = 8, height = 6)",
+    "cat('已生成中心性图: Fig2_centrality_centrality_plot.pdf\\n')"
+  )
+  
+  add_code_record(recorder, "network_analysis", code_lines, "网络分析阶段")
+}
+
+# 记录网络温度分析代码
+record_temperature_analysis <- function(recorder, final_variables, group_var = NULL) {
+  code_lines <- c(
+    "# ===== 网络温度分析 Network Temperature Analysis =====",
+    "library(psychonetrics)",
+    "library(IsingSampler)  # 网络熵计算",
+    "library(igraph)       # 网络指标计算",
+    ""
+  )
+  
+  if(!is.null(group_var)) {
+    code_lines <- c(code_lines,
+      "# 多组Ising模型建构 (8个约束层级)",
+      paste0('vars <- c(', paste0('"', final_variables, '"', collapse = ', '), ')'),
+      "",
+      "# M1: 所有参数自由（稠密）",
+      paste0('model1 <- Ising(analysis_data, vars = vars, groups = "', group_var, '") %>% runmodel'),
+      "# M2: 所有参数自由（稀疏）", 
+      'model2 <- model1 %>% prune(alpha = 0.05) %>% stepup(alpha = 0.05)',
+      "",
+      "# M3: 网络结构相等（稠密）",
+      'model3 <- model1 %>% groupequal("omega") %>% runmodel',
+      "# M4: 网络结构相等（稀疏）",
+      'model4 <- model3 %>% prune(alpha = 0.05) %>% stepup(mi = "mi_equal", alpha = 0.05)',
+      "",
+      "# M5: 网络结构+阈值相等（稠密）",
+      'model5 <- model3 %>% groupequal("tau") %>% runmodel',
+      "# M6: 网络结构+阈值相等（稀疏）",
+      'model6 <- model5 %>% prune(alpha = 0.05) %>% stepup(mi = "mi_equal", alpha = 0.05)',
+      "",
+      "# M7: 所有参数相等（稠密）",
+      'model7 <- model5 %>% groupequal("beta") %>% runmodel',
+      "# M8: 所有参数相等（稀疏）",
+      'model8 <- model7 %>% prune(alpha = 0.05) %>% stepup(mi = "mi_equal", alpha = 0.05)',
+      "",
+      "# 模型列表",
+      'models <- list(',
+      '  "M1_Free_Dense" = model1,',
+      '  "M2_Free_Sparse" = model2,', 
+      '  "M3_Omega_Dense" = model3,',
+      '  "M4_Omega_Sparse" = model4,',
+      '  "M5_OmegaTau_Dense" = model5,',
+      '  "M6_OmegaTau_Sparse" = model6,',
+      '  "M7_OmegaTauBeta_Dense" = model7,',
+      '  "M8_OmegaTauBeta_Sparse" = model8',
+      ')'
+    )
+  } else {
+    code_lines <- c(code_lines,
+      "# 单组Ising模型建构",
+      paste0('vars <- c(', paste0('"', final_variables, '"', collapse = ', '), ')'),
+      "",
+      "# 稠密和稀疏模型",
+      'model1 <- Ising(analysis_data, vars = vars) %>% runmodel',
+      'model2 <- model1 %>% prune(alpha = 0.05) %>% stepup(alpha = 0.05)',
+      "",
+      'models <- list(',
+      '  "Dense_Model" = model1,',
+      '  "Sparse_Model" = model2',
+      ')'
+    )
+  }
+  
+  code_lines <- c(code_lines,
+    "",
+    "# 模型比较",
+    'comparison_result <- psychonetrics::compare('
+  )
+  
+  if(!is.null(group_var)) {
+    model_refs <- paste0('models[[', 1:8, ']]', collapse = ', ')
+    code_lines <- c(code_lines, paste0('  ', model_refs))
+  } else {
+    code_lines <- c(code_lines, '  models[[1]], models[[2]]')
+  }
+  
+  code_lines <- c(code_lines,
+    ') %>% arrange(BIC)',
+    'print(comparison_result)',
+    ""
+  )
+  
+  add_code_record(recorder, "temperature_analysis", code_lines, "网络温度分析阶段")
+}
+
+# 记录可视化代码
+record_visualization <- function(recorder, final_variables, group_var = NULL) {
+  code_lines <- c(
+    "# ===== 网络可视化 Network Visualization =====",
+    "library(ggplot2)",
+    "library(viridis)",
+    "",
+    "# 选择最佳模型",
+    'best_model_idx <- which.min(comparison_result$BIC)',
+    'best_model <- models[[best_model_idx]]',
+    'cat("最佳模型:", names(models)[best_model_idx], "\\n")',
+    "",
+    "# 提取网络温度",
+    'temperatures <- sapply(models, function(m) {',
+    '  beta_params <- psychonetrics::parameters(m)',
+    '  beta_values <- beta_params[beta_params$matrix == "beta", "est"]',
+    '  1 / mean(beta_values, na.rm = TRUE)',
+    '})',
+    'print(temperatures)',
+    ""
+  )
+  
+  if(!is.null(group_var)) {
+    code_lines <- c(code_lines,
+      "# 温度比较条形图",
+      'temperature_df <- data.frame(',
+      '  Model = names(temperatures),',
+      '  Temperature = temperatures',
+      ')',
+      '',
+      '# 缩短模型名称以便显示',
+      'temperature_df$Model <- gsub("_Free_Dense", "_Free", temperature_df$Model)',
+      'temperature_df$Model <- gsub("_Free_Sparse", "_Sparse", temperature_df$Model)',
+      'temperature_df$Model <- gsub("_Equal_Dense", "_Dense", temperature_df$Model)',
+      'temperature_df$Model <- gsub("_Equal_Sparse", "_Sparse", temperature_df$Model)',
+      '',
+      'pdf("Fig4a_temperature_comparison.pdf", width = 10, height = 6)',
+      'par(mar = c(5, 10, 4, 2))',
+      'barplot(temperature_df$Temperature,',
+      '        names.arg = temperature_df$Model,',
+      '        horiz = TRUE,',
+      '        col = rainbow(nrow(temperature_df), alpha = 0.7),',
+      '        main = "Network Temperature Comparison\\n(8 Constraint Models)",',
+      '        xlab = "Temperature (T = 1/β)",',
+      '        las = 1,',
+      '        cex.names = 0.7)',
+      'dev.off()'
+    )
+  }
+  
+  code_lines <- c(code_lines,
+    "",
+    "# 网络热图 (症状协方差矩阵)",
+    'covariance_matrix <- cov(analysis_data[, vars], use = "complete.obs")',
+    'rownames(covariance_matrix) <- vars',
+    'colnames(covariance_matrix) <- vars',
+    '',
+    'pdf("Fig4b_temperature_heatmap.pdf", width = 8, height = 6)',
+    'heatmap(covariance_matrix,',
+    '        symm = TRUE,', 
+    '        col = viridis::plasma(100),',
+    '        Rowv = NA,',
+    '        main = "Symptom Covariance Matrix")',
+    'dev.off()'
+  )
+  
+  add_code_record(recorder, "visualization", code_lines, "网络可视化阶段")
+}
+
+# 记录结果导出代码
+record_exports <- function(recorder, final_variables) {
+  code_lines <- c(
+    "# ===== 结果导出 Results Export =====",
+    "",
+    "# 提取网络指标",
+    'extract_network_metrics <- function(models) {',
+    '  metrics <- list()',
+    '  for(model_name in names(models)) {',
+    '    model <- models[[model_name]]',
+    '    ',
+    '    # 计算温度',
+    '    params <- psychonetrics::parameters(model)',
+    '    beta_params <- params[params$matrix == "beta", "est"]',
+    '    temperature <- 1 / mean(beta_params, na.rm = TRUE)',
+    '    ',
+    '    # 提取网络矩阵',
+    '    omega_matrices <- psychonetrics::getmatrix(model, "omega")',
+    '    omega_matrix <- if(is.list(omega_matrices)) omega_matrices[[1]] else omega_matrices',
+    '    ',
+    '    # 计算网络指标',
+    '    connectivity <- sum(abs(omega_matrix[upper.tri(omega_matrix)]))',
+    '    n_nodes <- nrow(omega_matrix)',
+    '    max_edges <- n_nodes * (n_nodes - 1) / 2',
+    '    density <- sum(omega_matrix[upper.tri(omega_matrix)] != 0) / max_edges',
+    '    global_strength <- sum(abs(omega_matrix)) / 2',
+    '    ',
+    '    # 拟合指标',
+    '    tryCatch({',
+    '      model_AIC <- AIC(model)',
+    '      model_BIC <- BIC(model)',
+    '    }, error = function(e) {',
+    '      model_AIC <- NA',
+    '      model_BIC <- NA',
+    '    })',
+    '    ',
+    '    metrics[[model_name]] <- list(',
+    '      temperature = temperature,',
+    '      connectivity = connectivity,',
+    '      density = density,',
+    '      global_strength = global_strength,', 
+    '      n_nodes = n_nodes,',
+    '      AIC = model_AIC,',
+    '      BIC = model_BIC',
+    '    )',
+    '  }',
+    '  return(metrics)',
+    '}',
+    '',
+    '# 提取指标',
+    'network_metrics <- extract_network_metrics(models)',
+    '',
+    '# 生成CSV表格',
+    'metrics_df <- data.frame()',
+    'for(model_name in names(network_metrics)) {',
+    '  metric <- network_metrics[[model_name]]',
+    '  row_data <- data.frame(',
+    '    Model = model_name,',
+    '    Temperature = round(metric$temperature, 4),',
+    '    Global_Strength = round(metric$global_strength, 4),',
+    '    Network_Density = round(metric$density, 4),',
+    '    Connectivity = round(metric$connectivity, 4),',
+    '    Number_of_Nodes = metric$n_nodes,',
+    '    Model_AIC = round(metric$AIC, 2),',
+    '    Model_BIC = round(metric$BIC, 2)',
+    '  )',
+    '  metrics_df <- rbind(metrics_df, row_data)',
+    '}',
+    '',
+    'write.csv(metrics_df, "Fig4_temperature_network_metrics.csv", row.names = FALSE)',
+    'print(metrics_df)'
+  )
+  
+  add_code_record(recorder, "exports", code_lines, "结果导出阶段")
+}
+
+# 生成完整R脚本
+generate_complete_script <- function(recorder, output_path = NULL) {
+  if(is.null(recorder)) return(NULL)
+  
+  # 脚本头部
+  header_lines <- c(
+    "################################################################################",
+    "##                    心理量表网络温度分析脚本                      ##",
+    "##                 Psychology Network Temperature Analysis                    ##",
+    "################################################################################",
+    "##", 
+    paste0("## 生成时间 Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+    "## 由NetworkApp自动生成 Auto-generated by NetworkApp",
+    "##",
+    "## 使用说明 Instructions:", 
+    "## 1. 确保安装所需R包 Install required packages",
+    "## 2. 设置工作目录 Set working directory",
+    "## 3. 更新数据文件路径 Update data file path",
+    "## 4. 运行脚本 Execute script",
+    "##",
+    "################################################################################",
+    "",
+    "# 清理环境 Clear environment",
+    "rm(list = ls())",
+    "",
+    "# 设置工作目录 Set working directory",
+    "# setwd('/path/to/your/working/directory')",
+    "",
+    "# 检查并安装所需包 Check and install required packages",
+    "required_packages <- c('readxl', 'dplyr', 'psychonetrics', 'ggplot2', 'viridis', 'IsingSampler', 'igraph')",
+    "for(pkg in required_packages) {",
+    "  if(!require(pkg, character.only = TRUE)) {",
+    "    install.packages(pkg)",
+    "    library(pkg, character.only = TRUE)",
+    "  }",
+    "}",
+    "",
+    "# 特殊包安装 Special packages installation",
+    "# if(!require(IsingSampler)) devtools::install_github('SachaEpskamp/IsingSampler')",
+    "# if(!require(psychonetrics)) install.packages('psychonetrics')",
+    ""
+  )
+  
+  # 组合所有代码部分
+  all_lines <- c(header_lines)
+  
+  # 动态获取所有实际记录的sections，按逻辑顺序排列
+  all_sections <- names(recorder)
+  
+  # 定义sections的逻辑顺序
+  section_order <- c(
+    "data_loading", 
+    "data_preprocessing", 
+    "network_analysis", 
+    "bridge_analysis", 
+    "bridge_visualization",
+    "stability_analysis",      # quickNet的Stability()函数
+    "edge_stability", 
+    "centrality_stability", 
+    "stability_visualization",
+    "group_comparison",
+    "bayesian_analysis", 
+    "temperature_analysis", 
+    "visualization", 
+    "exports"
+  )
+  
+  # 按顺序处理已存在的sections
+  for(section in section_order) {
+    if(section %in% all_sections && length(recorder[[section]]) > 0) {
+      all_lines <- c(all_lines, recorder[[section]], "")
+    }
+  }
+  
+  # 处理不在预定义顺序中的其他sections，但排除内部sections
+  remaining_sections <- setdiff(all_sections, c(section_order, "parameters", "session_info"))
+  for(section in remaining_sections) {
+    if(length(recorder[[section]]) > 0) {
+      all_lines <- c(all_lines, recorder[[section]], "")
+    }
+  }
+  
+  # 添加脚本尾部
+  footer_lines <- c(
+    "################################################################################",
+    "##                              脚本结束                                ##",
+    "##                           Script Complete                               ##",
+    "################################################################################",
+    "",
+    "# 显示完成信息",
+    'cat("\\n=== 网络温度分析完成 Network Temperature Analysis Complete ===\\n")',
+    'cat("\\n生成文件 Generated files:\\n")',
+    'cat("- Fig4a_temperature_comparison.pdf\\n")',
+    'cat("- Fig4b_temperature_heatmap.pdf\\n")', 
+    'cat("- Fig4_temperature_network_metrics.csv\\n")',
+    'cat("\\n请检查结果文件 Please check the result files.\\n")'
+  )
+  
+  all_lines <- c(all_lines, footer_lines)
+  
+  # 保存或返回
+  if(!is.null(output_path)) {
+    writeLines(all_lines, output_path, useBytes = TRUE)
+    return(output_path)
+  } else {
+    return(paste(all_lines, collapse = "\n"))
+  }
+}

@@ -47,9 +47,38 @@ tryCatch({
                                 missing_rates = colSums(is.na(data))/nrow(data))))
   }
   compute_scale_scores_advanced <<- function(data, scales) { return(data) }
-  safe_network_analysis <<- function(data, threshold = 0.05, edge_labels = TRUE, colors = NULL, groups = NULL, shape = NULL, title = NULL, ...) { 
+  safe_network_analysis <<- function(data, threshold = 0.05, edge_labels = TRUE, colors = NULL, groups = NULL, shape = NULL, title = NULL, estimator = "EBICglasso", ...) { 
     if(requireNamespace("quickNet", quietly = TRUE)) {
-      # 构建quickNet参数
+      
+      # 如果用户选择了quickNet默认以外的估计方法，先用bootnet估计网络
+      if(estimator != "EBICglasso") {
+        if(requireNamespace("bootnet", quietly = TRUE)) {
+          tryCatch({
+            # 使用bootnet进行网络估计
+            net_result <- bootnet::estimateNetwork(data, default = estimator, threshold = TRUE)
+            
+            # 提取网络矩阵
+            if(!is.null(net_result$graph)) {
+              # 使用估计的网络矩阵，通过qgraph可视化
+              if(requireNamespace("qgraph", quietly = TRUE)) {
+                return(qgraph::qgraph(net_result$graph, 
+                                    layout = "spring",
+                                    edge.labels = edge_labels,
+                                    threshold = threshold,
+                                    color = colors,
+                                    groups = groups,
+                                    shape = shape,
+                                    title = title,
+                                    ...))
+              }
+            }
+          }, error = function(e) {
+            warning(paste("使用", estimator, "估计失败，回退到quickNet默认方法:", e$message))
+          })
+        }
+      }
+      
+      # 默认使用quickNet（通常是EBICglasso）
       args <- list(
         data = data,
         threshold = threshold,
@@ -728,6 +757,24 @@ ui <- dashboardPage(
                           value = 0.05, min = 0, max = 0.5, step = 0.01),
               helpText("控制显示边的最小强度，推荐0.05"),
               
+              br(),
+              
+              selectInput("network_estimator", "网络估计方法",
+                         choices = list(
+                           "EBICglasso (推荐)" = "EBICglasso",
+                           "MGM (混合数据)" = "mgm", 
+                           "Ising (二元数据)" = "IsingFit",
+                           "Correlation (相关网络)" = "cor",
+                           "Partial Correlation" = "pcor",
+                           "TMFG (三角最大滤波图)" = "TMFG"
+                         ),
+                         selected = "EBICglasso"),
+              
+              # 动态显示模型说明
+              uiOutput("network_estimator_help"),
+              
+              br(),
+              
               checkboxInput("show_edge_labels", "显示边权重", TRUE),
               helpText("在网络图上显示具体的相关系数"),
               
@@ -1067,7 +1114,10 @@ ui <- dashboardPage(
                 uiOutput("temp_analysis_summary"),
                 br(),
                 downloadButton("download_temp_results", "📥 下载完整结果", 
-                              class = "btn-success btn-sm")
+                              class = "btn-success btn-sm"),
+                br(), br(),
+                downloadButton("download_temp_script", "📝 下载完整R脚本", 
+                              class = "btn-info btn-sm")
               )
             ),
             
@@ -1104,13 +1154,10 @@ ui <- dashboardPage(
             downloadButton("download_temp_plot", "下载温度图", class = "btn-primary btn-sm")
           ),
           
-          # 网络热图
+          # 症状协方差热图
           box(
-            title = "🔥 网络连接热图", status = "warning", solidHeader = TRUE, width = 6,
-            conditionalPanel(
-              condition = "input.enable_grouping",
-              selectInput("heatmap_group_select", "选择显示组别", choices = NULL)
-            ),
+            title = "🔥 症状协方差热图", status = "warning", solidHeader = TRUE, width = 6,
+            p("显示分析变量间的协方差矩阵热图，反映症状间的共变关系"),
             plotOutput("temp_network_heatmap"),
             br(),
             downloadButton("download_temp_heatmap", "下载热图", class = "btn-warning btn-sm")
@@ -2701,6 +2748,82 @@ server <- function(input, output, session) {
     return(result)
   })
   
+  # 网络估计方法帮助文本
+  output$network_estimator_help <- renderUI({
+    if(is.null(input$network_estimator)) return(NULL)
+    
+    help_content <- switch(input$network_estimator,
+      "EBICglasso" = list(
+        title = "📊 EBICglasso（推荐）",
+        description = "基于扩展贝叶斯信息准则的稀疏高斯图模型估计",
+        advantages = c("• 适用于连续数据", "• 自动选择最优正则化参数", "• 产生稀疏网络结构", "• 理论基础扎实"),
+        usage = "适合: 连续心理量表数据（如李克特量表）",
+        note = "这是最常用和推荐的方法，适合大多数心理网络分析"
+      ),
+      "mgm" = list(
+        title = "🔗 MGM（混合图模型）",
+        description = "处理不同类型变量的混合图模型",
+        advantages = c("• 支持连续、二元、计数变量混合", "• 可建模非线性关系", "• 适合复杂数据结构"),
+        usage = "适合: 混合数据类型（如量表+人口学变量）",
+        note = "当数据包含不同类型变量时的首选方法"
+      ),
+      "IsingFit" = list(
+        title = "⚡ Ising模型",
+        description = "专门用于二元数据的Ising模型",
+        advantages = c("• 专为二元数据设计", "• 可计算网络温度", "• 支持组间比较"),
+        usage = "适合: 二元症状数据（有/无症状）",
+        note = "当数据为二元编码时使用，支持温度分析"
+      ),
+      "cor" = list(
+        title = "📈 相关网络",
+        description = "基于零阶相关的网络模型",
+        advantages = c("• 简单直观", "• 计算速度快", "• 易于解释"),
+        usage = "适合: 探索性分析和教学演示",
+        note = "简单方法，但可能包含虚假连接"
+      ),
+      "pcor" = list(
+        title = "📊 偏相关网络",
+        description = "基于偏相关系数的网络模型",
+        advantages = c("• 控制其他变量影响", "• 显示直接关系", "• 相对简单"),
+        usage = "适合: 中等规模的连续数据",
+        note = "比相关网络更准确，但不如EBICglasso稀疏"
+      ),
+      "TMFG" = list(
+        title = "🌳 三角最大滤波图",
+        description = "基于图论的稀疏网络构建方法",
+        advantages = c("• 产生层次化结构", "• 固定稀疏度", "• 计算高效"),
+        usage = "适合: 大规模数据和层次分析",
+        note = "产生固定稀疏度的层次网络结构"
+      )
+    )
+    
+    if(is.null(help_content)) return(NULL)
+    
+    div(
+      style = "background-color: #f8f9fa; border-left: 4px solid #007bff; padding: 10px; margin: 5px 0;",
+      h5(help_content$title, style = "color: #007bff; margin-bottom: 8px;"),
+      tags$p(help_content$description, style = "margin-bottom: 8px; font-size: 14px;"),
+      
+      div(
+        style = "margin-bottom: 8px;",
+        tags$strong("优势:", style = "color: #28a745;"),
+        HTML(paste(help_content$advantages, collapse = "<br/>"))
+      ),
+      
+      div(
+        style = "margin-bottom: 8px;",
+        tags$strong("适用场景:", style = "color: #17a2b8;"),
+        tags$span(help_content$usage, style = "font-style: italic;")
+      ),
+      
+      div(
+        style = "background-color: #fff3cd; padding: 6px; border-radius: 4px; font-size: 13px;",
+        tags$i(class = "fa fa-lightbulb-o", style = "color: #856404; margin-right: 5px;"),
+        help_content$note
+      )
+    )
+  })
+  
   # 运行网络分析
   observeEvent(input$run_analysis, {
     # 检查变量选择是否已确认且分析数据已准备
@@ -2866,6 +2989,34 @@ server <- function(input, output, session) {
           VIZ_CONFIG$colors$primary[1:min(ncol(analysis_data_final), length(VIZ_CONFIG$colors$primary))]
         })
         
+        # 初始化代码记录器（如果还没有的话）
+        if(is.null(values$code_recorder)) {
+          values$code_recorder <- init_code_recorder()
+          
+          # 记录数据加载代码
+          if(!is.null(values$upload_filepath)) {
+            values$code_recorder <- record_data_loading(values$code_recorder, values$upload_filepath, values$sheet_name)
+          }
+          
+          # 记录数据预处理代码
+          values$code_recorder <- record_data_preprocessing(
+            values$code_recorder, 
+            colnames(analysis_data_final), 
+            "无",  # 网络分析通常不二值化
+            "0/1编码", 
+            NULL  # 无分组
+          )
+        }
+        
+        # 记录网络分析代码
+        values$code_recorder <- record_network_analysis(
+          values$code_recorder,
+          colnames(analysis_data_final),
+          input$threshold %||% 0.05,
+          values$variable_groups,
+          estimator = input$network_estimator %||% "EBICglasso"
+        )
+        
         values$network_result <- safe_network_analysis(
           data = analysis_data_final,
           title = "Network Analysis",
@@ -2873,7 +3024,8 @@ server <- function(input, output, session) {
           threshold = input$threshold %||% 0.05,
           edge.labels = TRUE,  # 按您的要求显示边权重
           colors = values$network_group_colors,  # 使用组级别的颜色向量
-          layout = values$layout
+          layout = values$layout,
+          estimator = input$network_estimator %||% "EBICglasso"  # 添加网络估计方法参数
         )
         
         # 保存layout和配色信息供后续网络分析使用
@@ -3071,6 +3223,26 @@ server <- function(input, output, session) {
                   # Bridge分析 - 使用验证过的communities
                   values$bridge_result <- Bridge(bridge_network_base, communities = bridge_groups)
                   
+                  # 记录桥接分析代码
+                  bridge_code <- c(
+                    "# ===== 桥接网络分析 Bridge Network Analysis =====",
+                    "library(quickNet)",
+                    "",
+                    "# 定义变量分组",
+                    paste0('bridge_groups <- list('),
+                    paste0('  ', names(bridge_groups), ' = c(', 
+                           sapply(bridge_groups, function(x) paste(x, collapse = ', ')), ')', collapse = ',\n  '),
+                    ')',
+                    "",
+                    "# 进行Bridge分析",
+                    "bridge_result <- Bridge(network_result, communities = bridge_groups)",
+                    "",
+                    paste0("# 识别桥接节点 (每组", input$bridge_n %||% 1, "个)"),
+                    paste0("bridge_groups_result <- bridgeGroup(bridge_result, bridge_groups, n = ", input$bridge_n %||% 1, ", by_group = TRUE)"),
+                    ""
+                  )
+                  values$code_recorder <- record_actual_code(values$code_recorder, bridge_code, "bridge_analysis", "桥接网络分析")
+                  
                   # bridgeGroup分析 - 识别桥接节点
                   bridge_n <- input$bridge_n %||% 1
                   values$bridge_groups <- bridgeGroup(values$bridge_result, bridge_groups, 
@@ -3170,6 +3342,29 @@ server <- function(input, output, session) {
                     zcolor[1:length(values$network_groups_by_index)]
                   }
                   
+                  # 记录桥接网络可视化代码
+                  bridge_viz_code <- c(
+                    "# 桥接网络可视化",
+                    "shape_list <- ifelse(bridge_groups_result == 'Bridge', 'square', 'circle')",
+                    "",
+                    "# 生成桥接网络图（方形=桥接节点，圆形=普通节点）",
+                    "bridge_network <- quickNet(",
+                    "  data = analysis_data,",
+                    "  title = 'Bridge Network Analysis',",
+                    "  groups = groups,",
+                    "  shape = shape_list,",
+                    paste0("  threshold = ", input$threshold %||% 0.05, ","),
+                    paste0("  edge.labels = ", input$show_edge_labels %||% TRUE, ","),
+                    "  posCol = c('#2376b7', '#134857'),",
+                    "  negCol = c('#d2568c', '#62102e'),",
+                    "  color = c('#63bbd0', '#f87599', '#fed71a', '#d1c2d3')",
+                    ")",
+                    "",
+                    "# 保存桥接网络图",
+                    "get_network_plot(bridge_network, prefix = 'Fig3_bridge_network', width = 6, height = 4.5)"
+                  )
+                  values$code_recorder <- record_actual_code(values$code_recorder, bridge_viz_code, "bridge_visualization", "桥接网络可视化")
+                  
                   # 生成桥接网络图（使用quickNet，突出显示桥接节点）
                   values$bridge_network <- quickNet(
                     analysis_data_final,
@@ -3248,6 +3443,17 @@ server <- function(input, output, session) {
                 }
                 
                 showNotification("桥接网络分析完成！", type = "message")
+                
+                # 更新完整脚本（包含桥接分析）
+                if(!is.null(values$code_recorder) && !is.null(values$output_folder)) {
+                  tryCatch({
+                    script_path <- file.path(values$output_folder, "NetworkAnalysis_Complete_Script.R")
+                    generate_complete_script(values$code_recorder, script_path)
+                    cat("📝 已更新完整脚本（包含桥接分析）:", script_path, "\n")
+                  }, error = function(e) {
+                    cat("⚠️ 桥接分析脚本更新失败:", e$message, "\n")
+                  })
+                }
                 }
               } else {
                 showNotification("quickNet包不可用，跳过桥接分析", type = "warning")
@@ -3272,6 +3478,87 @@ server <- function(input, output, session) {
           # 如果没有启用桥接分析，清空相关结果
           values$bridge_result <- NULL
           values$bridge_network <- NULL
+        }
+        
+        # 记录中心性分析代码
+        if(!is.null(values$code_recorder)) {
+          values$code_recorder <- add_code_record(
+            values$code_recorder,
+            "network_analysis",
+            c(
+              "",
+              "# 中心性分析 Centrality Analysis",
+              "centrality_result <- Centrality(network_result)",
+              "print(centrality_result)",
+              "",
+              "# 中心性可视化",
+              "png('Fig2_centrality_plot.png', width = 800, height = 600, res = 300)",
+              "centralityPlot(network_result, include = c('Strength', 'Closeness', 'Betweenness'))",
+              "dev.off()"
+            ),
+            "中心性分析阶段"
+          )
+          
+          # 记录网络可视化代码
+          values$code_recorder <- add_code_record(
+            values$code_recorder,
+            "visualization",
+            c(
+              "# ===== 网络可视化 Network Visualization =====",
+              "",
+              "# 主网络图",
+              "png('Fig1_network_plot.png', width = 800, height = 600, res = 300)",
+              "plot(network_result, ",
+              "     layout = 'spring',",
+              "     theme = 'colorblind',",
+              "     edge.labels = TRUE,",
+              "     node.width = 1.2,",
+              "     title = 'Network Analysis')",
+              "dev.off()",
+              "",
+              "# 网络布局保存",
+              "layout_coords <- network_result$layout",
+              "write.csv(layout_coords, 'network_layout.csv')"
+            ),
+            "网络可视化阶段"
+          )
+          
+          # 记录结果保存代码
+          values$code_recorder <- add_code_record(
+            values$code_recorder,
+            "exports",
+            c(
+              "# ===== 结果保存 Results Export =====",
+              "",
+              "# 保存网络对象",
+              "saveRDS(network_result, 'network_result.rds')",
+              "",
+              "# 保存中心性结果",
+              "if(exists('centrality_result')) {",
+              "  saveRDS(centrality_result, 'centrality_result.rds')",
+              "  write.csv(centrality_result$centrality_table, 'centrality_measures.csv')",
+              "}",
+              "",
+              "# 网络连接矩阵导出",
+              "adjacency_matrix <- network_result$graph$adjacency",
+              "write.csv(adjacency_matrix, 'adjacency_matrix.csv')",
+              "",
+              "# 边权重矩阵导出",
+              "if(!is.null(network_result$graph$weights)) {",
+              "  weights_matrix <- network_result$graph$weights",
+              "  write.csv(weights_matrix, 'weights_matrix.csv')",
+              "}"
+            ),
+            "结果导出阶段"
+          )
+          
+          # 生成完整脚本并保存
+          # 注意：不在网络分析完成后立即生成脚本
+          # 因为可能还有后续的桥接分析、稳定性分析、贝叶斯分析等
+          # 脚本会在下载时或所有分析完成后生成
+          if(!is.null(values$code_recorder)) {
+            cat("📝 代码记录器已更新，包含网络分析代码\n")
+          }
         }
         
         incProgress(1, detail = "网络分析完成!")
@@ -3553,6 +3840,21 @@ server <- function(input, output, session) {
           
           if(input$run_edge_stability) {
             tryCatch({
+              # 记录边稳定性分析代码
+              edge_stability_code <- c(
+                "# ===== 边稳定性分析 Edge Stability Analysis =====",
+                "library(bootnet)",
+                "",
+                paste0("# Bootstrap边稳定性分析 (", input$stability_bootstrap, "次重采样)"),
+                paste0("edge_boot <- bootnet(analysis_data, nBoots = ", input$stability_bootstrap, ","),
+                "                   default = 'EBICglasso', type = 'nonparametric')",
+                "",
+                "# 稳定性统计",
+                "edge_stability_summary <- summary(edge_boot)",
+                "print(edge_stability_summary)"
+              )
+              values$code_recorder <- record_actual_code(values$code_recorder, edge_stability_code, "edge_stability", "边稳定性分析")
+              
               edge_boot <- bootnet(values$analysis_data, nBoots = input$stability_bootstrap, 
                                  default = "EBICglasso", type = "nonparametric")
               values$edge_stability <- edge_boot
@@ -3567,6 +3869,25 @@ server <- function(input, output, session) {
           
           if(input$run_centrality_stability) {
             tryCatch({
+              # 记录中心性稳定性分析代码
+              cent_stability_code <- c(
+                "# ===== 中心性稳定性分析 Centrality Stability Analysis =====",
+                "",
+                paste0("# Bootstrap中心性稳定性分析 (", input$stability_bootstrap, "次重采样)"),
+                paste0("cent_boot <- bootnet(analysis_data, nBoots = ", input$stability_bootstrap, ","),
+                "                   default = 'EBICglasso', type = 'case',",
+                "                   statistics = c('strength', 'closeness', 'betweenness'))",
+                "",
+                "# 中心性稳定性统计",
+                "cent_stability_summary <- summary(cent_boot)",
+                "print(cent_stability_summary)",
+                "",
+                "# CS系数计算（稳定性阈值）",
+                "cs_coefficients <- corStability(cent_boot)",
+                "print(cs_coefficients)"
+              )
+              values$code_recorder <- record_actual_code(values$code_recorder, cent_stability_code, "centrality_stability", "中心性稳定性分析")
+              
               cent_boot <- bootnet(values$analysis_data, nBoots = input$stability_bootstrap,
                                  default = "EBICglasso", type = "case", 
                                  statistics = c("strength", "closeness", "betweenness"))
@@ -3600,6 +3921,22 @@ server <- function(input, output, session) {
               
               # S1: 网络稳定性分析（对应Fig1主网络图的稳定性）
               if(!is.null(values$analysis_data)) {
+                # 记录网络稳定性分析代码
+                stability_analysis_code <- c(
+                  "# ===== 网络稳定性分析 Network Stability Analysis =====",
+                  "library(quickNet)",
+                  "",
+                  "# quickNet包的稳定性分析",
+                  "sta_result <- Stability(analysis_data)",
+                  "",
+                  "# 生成稳定性图表",
+                  paste0('timestamp <- "', timestamp, '"'),
+                  'prefix <- paste0("SFig2_network_stability_", timestamp)',
+                  'get_stability_plot(sta_result, prefix = prefix, width = 6, height = 4.5)',
+                  'cat("网络稳定性分析完成，图表已保存\\n")'
+                )
+                values$code_recorder <- record_actual_code(values$code_recorder, stability_analysis_code, "stability_analysis", "quickNet网络稳定性分析")
+                
                 sta_result <- Stability(values$analysis_data)
                 values$stability_complete <- sta_result
                 
@@ -3672,6 +4009,17 @@ server <- function(input, output, session) {
           
           incProgress(1, detail = "稳定性分析完成!")
           showNotification("稳定性分析完成！", type = "message")
+          
+          # 更新完整脚本（包含稳定性分析）
+          if(!is.null(values$code_recorder) && !is.null(values$output_folder)) {
+            tryCatch({
+              script_path <- file.path(values$output_folder, "NetworkAnalysis_Complete_Script.R")
+              generate_complete_script(values$code_recorder, script_path)
+              cat("📝 已更新完整脚本（包含稳定性分析）:", script_path, "\n")
+            }, error = function(e) {
+              cat("⚠️ 稳定性分析脚本更新失败:", e$message, "\n")
+            })
+          }
           
         } else {
           showNotification("需要bootnet包进行稳定性分析，请先安装", type = "warning")
@@ -4067,6 +4415,44 @@ server <- function(input, output, session) {
         incProgress(0.5, detail = "执行置换检验...")
         
         if(requireNamespace("quickNet", quietly = TRUE)) {
+          # 记录组别对比分析代码
+          group_comparison_code <- c(
+            "# ===== 组别网络对比分析 Group Network Comparison =====",
+            "library(quickNet)",
+            "",
+            "# 分组数据准备",
+            paste0("group_var <- '", input$temp_group_var, "'"),
+            "group1_data <- analysis_data[analysis_data[[group_var]] == unique(analysis_data[[group_var]])[1], ]",
+            "group2_data <- analysis_data[analysis_data[[group_var]] == unique(analysis_data[[group_var]])[2], ]",
+            "",
+            "# 移除分组变量",
+            "group1_data <- group1_data[, !names(group1_data) %in% group_var]",
+            "group2_data <- group2_data[, !names(group2_data) %in% group_var]",
+            "",
+            "# 确保完整案例",
+            "group1_clean <- group1_data[complete.cases(group1_data), ]",
+            "group2_clean <- group2_data[complete.cases(group2_data), ]",
+            "",
+            paste0("# 网络比较测试 (", input$permutation_n, "次置换)"),
+            "compare_result <- NetCompare(",
+            "  group1_clean, group2_clean,",
+            paste0("  it = ", input$permutation_n, ","),
+            paste0("  p.adjust.methods = '", input$p_adjust_method, "'"),
+            ")",
+            "",
+            "# 输出比较结果",
+            "print('全局强度不变性检验:')",
+            "print(compare_result$glstrinv.pval)",
+            "print('网络结构不变性检验:')",
+            "print(compare_result$nwinv.pval)",
+            "",
+            "# 显著差异边",
+            "if(!is.null(compare_result$diff_sig)) {",
+            "  cat('显著差异边数量:', sum(compare_result$diff_sig != 0, na.rm = TRUE), '\\n')",
+            "}"
+          )
+          values$code_recorder <- record_actual_code(values$code_recorder, group_comparison_code, "group_comparison", "组别网络对比分析")
+          
           compare_result <- NetCompare(
             group1_clean, group2_clean,
             it = input$permutation_n,
@@ -4252,6 +4638,17 @@ server <- function(input, output, session) {
           incProgress(1, detail = "组间比较完成!")
           
           showNotification(paste0("组间比较分析完成！组1: ", nrow(group1_clean), " 案例，组2: ", nrow(group2_clean), " 案例"), type = "message")
+          
+          # 更新完整脚本（包含组别对比分析）
+          if(!is.null(values$code_recorder) && !is.null(values$output_folder)) {
+            tryCatch({
+              script_path <- file.path(values$output_folder, "NetworkAnalysis_Complete_Script.R")
+              generate_complete_script(values$code_recorder, script_path)
+              cat("📝 已更新完整脚本（包含组别对比分析）:", script_path, "\n")
+            }, error = function(e) {
+              cat("⚠️ 组别对比分析脚本更新失败:", e$message, "\n")
+            })
+          }
           
         } else {
           showNotification("quickNet包不可用，无法进行组间比较", type = "error")
@@ -6255,6 +6652,61 @@ server <- function(input, output, session) {
       incProgress(0.3, detail = "开始网络学习...")
       
       tryCatch({
+        # 记录贝叶斯网络分析代码
+        bayesian_code <- c(
+          "# ===== 贝叶斯网络分析 Bayesian Network Analysis =====",
+          "library(bnlearn)",
+          "library(Rgraphviz)  # 网络可视化",
+          "",
+          "# 数据离散化（如果需要）",
+          "# 贝叶斯网络通常需要离散数据",
+          "discrete_data <- apply(analysis_data, 2, function(x) {",
+          "  cut(x, breaks = 3, labels = c('Low', 'Medium', 'High'))",
+          "})",
+          "discrete_data <- as.data.frame(discrete_data)",
+          "",
+          paste0("# 贝叶斯网络学习算法: ", input$bn_algorithm),
+          paste0("# 评分函数: ", input$score_function),
+          paste0("# Bootstrap轮数: ", input$bootstrap_rounds),
+          "",
+          "# 约束设置",
+          if(!is.null(constraints$blacklist) && nrow(constraints$blacklist) > 0) {
+            paste0("blacklist <- data.frame(",
+                   "from = c(", paste0("'", constraints$blacklist$from, "'", collapse = ", "), "),",
+                   "to = c(", paste0("'", constraints$blacklist$to, "'", collapse = ", "), "))")
+          } else {
+            "blacklist <- NULL"
+          },
+          if(!is.null(constraints$whitelist) && nrow(constraints$whitelist) > 0) {
+            paste0("whitelist <- data.frame(",
+                   "from = c(", paste0("'", constraints$whitelist$from, "'", collapse = ", "), "),",
+                   "to = c(", paste0("'", constraints$whitelist$to, "'", collapse = ", "), "))")
+          } else {
+            "whitelist <- NULL"
+          },
+          "",
+          "# 学习网络结构",
+          paste0("learned_network <- ", input$bn_algorithm, "(discrete_data"),
+          if(!is.null(constraints$blacklist) && nrow(constraints$blacklist) > 0) ", blacklist = blacklist" else "",
+          if(!is.null(constraints$whitelist) && nrow(constraints$whitelist) > 0) ", whitelist = whitelist" else "",
+          ")",
+          "",
+          "# Bootstrap稳定性分析",
+          paste0("boot_result <- boot.strength(discrete_data, R = ", input$bootstrap_rounds, ","),
+          paste0("                           algorithm = '", input$bn_algorithm, "'"),
+          if(!is.null(constraints$blacklist) && nrow(constraints$blacklist) > 0) ", blacklist = blacklist" else "",
+          if(!is.null(constraints$whitelist) && nrow(constraints$whitelist) > 0) ", whitelist = whitelist" else "",
+          ")",
+          "",
+          "# 平均网络",
+          paste0("averaged_network <- averaged.network(boot_result, threshold = ", input$strength_threshold, ")"),
+          "",
+          "# 可视化",
+          "graphviz.plot(learned_network, main = 'Learned Bayesian Network')",
+          "strength.plot(averaged_network, boot_result, shape = 'ellipse')"
+        )
+        values$code_recorder <- record_actual_code(values$code_recorder, bayesian_code, "bayesian_analysis", "贝叶斯网络分析")
+        
         # 执行贝叶斯网络分析
         values$bayesian_result <- conduct_likert_bayesian_analysis(
           data = analysis_data,
@@ -6398,6 +6850,17 @@ server <- function(input, output, session) {
         
         bayesian_completed(TRUE)
         showNotification("贝叶斯网络分析完成！", type = "message")
+        
+        # 更新完整脚本（包含贝叶斯分析）
+        if(!is.null(values$code_recorder) && !is.null(values$output_folder)) {
+          tryCatch({
+            script_path <- file.path(values$output_folder, "NetworkAnalysis_Complete_Script.R")
+            generate_complete_script(values$code_recorder, script_path)
+            cat("📝 已更新完整脚本（包含贝叶斯分析）:", script_path, "\n")
+          }, error = function(e) {
+            cat("⚠️ 贝叶斯分析脚本更新失败:", e$message, "\n")
+          })
+        }
         
       }, error = function(e) {
         showNotification(paste("贝叶斯网络分析失败:", e$message), type = "error")
@@ -6935,6 +7398,261 @@ server <- function(input, output, session) {
     }
   )
   
+  # ==================== 网络温度分析下载处理器 ====================
+  
+  # 温度分析主要结果下载 - Fig4 PDF
+  output$download_temp_plot <- downloadHandler(
+    filename = "Fig4_network_temperature_comparison.pdf",
+    content = function(file) {
+      tryCatch({
+        if(is.null(values$temperature_result) || !values$temperature_result$success) {
+          # 创建空的PDF说明没有数据
+          pdf(file, width = 8, height = 6)
+          plot.new()
+          text(0.5, 0.5, "温度分析未完成或失败", cex = 1.5, col = "red")
+          dev.off()
+          return()
+        }
+        
+        pdf(file, width = 10, height = 8)
+        
+        result <- values$temperature_result
+        # 检查是否为多组分析
+        is_multigroup <- FALSE
+        if(!is.null(result$models) && length(result$models) > 0) {
+          first_model <- result$models[[1]]
+          if(!is.null(first_model) && !is.null(first_model@parameters)) {
+            params <- first_model@parameters
+            beta_params <- params[params$matrix == "beta", ]
+            groups <- unique(beta_params$group)
+            is_multigroup <- length(groups) > 1
+          }
+        }
+        
+        if(is_multigroup) {
+          # 多组分析：生成温度比较图
+          models <- result$models
+          model_names <- names(models)
+          temp_data <- data.frame(Model = character(), Group = character(), Temperature = numeric(), stringsAsFactors = FALSE)
+          
+          for(model_name in model_names) {
+            model <- models[[model_name]]
+            params <- model@parameters
+            beta_params <- params[params$matrix == "beta", ]
+            
+            if(nrow(beta_params) > 0) {
+              groups <- unique(beta_params$group)
+              for(group in groups) {
+                group_betas <- beta_params[beta_params$group == group, "est"]
+                if(length(group_betas) > 0) {
+                  group_temp <- 1 / mean(group_betas, na.rm = TRUE)
+                  temp_data <- rbind(temp_data, data.frame(
+                    Model = model_name, 
+                    Group = group, 
+                    Temperature = group_temp,
+                    stringsAsFactors = FALSE
+                  ))
+                }
+              }
+            }
+          }
+          
+          if(nrow(temp_data) > 0) {
+            # 重塑数据为矩阵格式
+            temp_matrix <- reshape(temp_data, idvar = "Model", timevar = "Group", direction = "wide")
+            rownames(temp_matrix) <- temp_matrix$Model
+            temp_matrix <- temp_matrix[, -1, drop = FALSE]
+            colnames(temp_matrix) <- gsub("Temperature.", "", colnames(temp_matrix))
+            temp_matrix <- as.matrix(temp_matrix)
+            
+            # 创建分组比较的条形图
+            par(mar = c(8, 6, 4, 8))
+            colors <- c("#4285F4", "#EA4335", "#FBBC04", "#34A853")
+            barplot(t(temp_matrix), 
+                    beside = TRUE,
+                    col = colors[1:ncol(temp_matrix)],
+                    main = "网络温度组间比较 - Fig4\n(多组约束模型温度对比)",
+                    xlab = "",
+                    ylab = "网络温度 (T = 1/β)",
+                    las = 2,
+                    cex.names = 0.7,
+                    cex.main = 1.2,
+                    legend.text = colnames(temp_matrix),
+                    args.legend = list(x = "topright", inset = c(-0.15, 0), cex = 0.8))
+            mtext("约束模型类型", side = 1, line = 6, cex = 1)
+          }
+        } else {
+          # 单组分析
+          metrics <- result$metrics
+          temperatures <- sapply(metrics, function(x) x$temperature)
+          temperatures <- temperatures[!is.na(temperatures)]
+          
+          if(length(temperatures) > 0) {
+            par(mar = c(5, 8, 4, 2))
+            barplot(temperatures, 
+                    names.arg = names(temperatures),
+                    horiz = TRUE,
+                    col = rainbow(length(temperatures), alpha = 0.7),
+                    main = "网络温度模型比较 - Fig4",
+                    xlab = "网络温度 (T = 1/β)",
+                    las = 1,
+                    cex.names = 0.8)
+          }
+        }
+        
+        dev.off()
+        cat("Fig4 PDF保存成功:", file, "\n")
+      }, error = function(e) {
+        cat("Fig4 PDF生成失败:", e$message, "\n")
+        # 生成错误说明PDF
+        pdf(file, width = 8, height = 6)
+        plot.new()
+        text(0.5, 0.5, paste("PDF生成失败:", e$message), cex = 1.2, col = "red")
+        dev.off()
+      })
+    }
+  )
+  
+  # 温度分析结果数据下载 - CSV
+  output$download_temp_results <- downloadHandler(
+    filename = "Fig4_temperature_results.csv",
+    content = function(file) {
+      tryCatch({
+        if(is.null(values$temperature_result) || !values$temperature_result$success) {
+          write("温度分析未完成或失败", file)
+          return()
+        }
+        
+        result <- values$temperature_result
+        
+        # 检查是否为多组分析并提取数据
+        if(!is.null(result$models) && length(result$models) > 0) {
+          first_model <- result$models[[1]]
+          params <- first_model@parameters
+          beta_params <- params[params$matrix == "beta", ]
+          groups <- unique(beta_params$group)
+          is_multigroup <- length(groups) > 1
+          
+          if(is_multigroup) {
+            # 多组分析：生成详细的温度数据表
+            models <- result$models
+            all_results <- list()
+            
+            for(model_name in names(models)) {
+              model <- models[[model_name]]
+              model_params <- model@parameters
+              model_beta_params <- model_params[model_params$matrix == "beta", ]
+              
+              for(group in groups) {
+                group_betas <- model_beta_params[model_beta_params$group == group, "est"]
+                if(length(group_betas) > 0) {
+                  group_temp <- 1 / mean(group_betas, na.rm = TRUE)
+                  all_results[[length(all_results) + 1]] <- data.frame(
+                    Model = model_name,
+                    Group = group,
+                    Beta_Mean = mean(group_betas, na.rm = TRUE),
+                    Temperature = group_temp,
+                    Model_Type = if(grepl("Dense", model_name)) "Dense" else "Sparse",
+                    Constraint_Level = case_when(
+                      grepl("Free", model_name) ~ "M1-M2: 自由模型",
+                      grepl("Omega", model_name) & !grepl("Tau", model_name) ~ "M3-M4: 网络相等", 
+                      grepl("OmegaTau", model_name) & !grepl("Beta", model_name) ~ "M5-M6: 网络+阈值相等",
+                      grepl("OmegaTauBeta", model_name) ~ "M7-M8: 完全相等",
+                      TRUE ~ "其他"
+                    ),
+                    stringsAsFactors = FALSE
+                  )
+                }
+              }
+            }
+            
+            results_df <- do.call(rbind, all_results)
+            
+            # 添加模型比较信息
+            if(!is.null(result$comparison)) {
+              comparison_info <- paste("最佳模型(BIC):", names(result$models)[1])
+              results_df$Best_Model_Notes <- comparison_info
+            }
+            
+            write.csv(results_df, file, row.names = FALSE)
+            
+          } else {
+            # 单组分析
+            metrics <- result$metrics
+            single_results <- data.frame(
+              Model = names(metrics),
+              Temperature = sapply(metrics, function(x) x$temperature),
+              stringsAsFactors = FALSE
+            )
+            write.csv(single_results, file, row.names = FALSE)
+          }
+        } else {
+          write("无法提取温度分析结果数据", file)
+        }
+        
+        cat("温度结果CSV保存成功:", file, "\n")
+      }, error = function(e) {
+        cat("温度结果CSV生成失败:", e$message, "\n")
+        write(paste("数据导出失败:", e$message), file)
+      })
+    }
+  )
+  
+  # 下载完整R脚本
+  output$download_temp_script <- downloadHandler(
+    filename = function() {
+      paste0("NetworkTemperatureAnalysis_Script_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".R")
+    },
+    content = function(file) {
+      tryCatch({
+        if(is.null(values$temperature_result) || 
+           !values$temperature_result$success ||
+           is.null(values$temperature_result$code_recorder)) {
+          
+          # 如果没有代码记录器，生成基本脚本
+          basic_script <- c(
+            "################################################################################",
+            "##                    心理量表网络温度分析脚本                      ##",
+            "##                 Psychology Network Temperature Analysis                    ##",
+            "################################################################################",
+            "",
+            "# 分析未完成或代码记录不可用",
+            "# Analysis not completed or code recorder unavailable",
+            "",
+            "# 请先运行完整的网络温度分析再下载脚本",
+            "# Please complete the network temperature analysis first",
+            "",
+            'cat("请在NetworkApp中运行完整分析后再下载脚本\n")'
+          )
+          
+          writeLines(basic_script, file)
+          return()
+        }
+        
+        # 使用代码记录器生成完整脚本
+        code_recorder <- values$temperature_result$code_recorder
+        script_content <- generate_complete_script(code_recorder)
+        
+        if(!is.null(script_content)) {
+          writeLines(strsplit(script_content, "\n")[[1]], file)
+          cat("📝 完整R脚本下载成功:", file, "\n")
+        } else {
+          writeLines(c("😭 脚本生成失败", "Script generation failed"), file)
+        }
+        
+      }, error = function(e) {
+        cat("⚠️ R脚本下载失败:", e$message, "\n")
+        writeLines(c(
+          "# R脚本生成错误 Script Generation Error",
+          paste("# 错误信息 Error:", e$message),
+          "",
+          "# 请在NetworkApp中重新运行分析",
+          "# Please re-run the analysis in NetworkApp"
+        ), file)
+      })
+    }
+  )
+  
   # 网络温度分析相关响应式输出
   output$temp_group_var_selector <- renderUI({
     req(values$processed_data)
@@ -6969,10 +7687,6 @@ server <- function(input, output, session) {
             groups <- unique(beta_params$group)
             group_choices <- setNames(groups, paste0("组别", seq_along(groups), " (", groups, ")"))
             
-            # 更新热图选择器
-            updateSelectInput(session, "heatmap_group_select",
-                            choices = group_choices,
-                            selected = groups[1])
             
             # 动态更新组别标题
             if(length(groups) >= 1) {
@@ -7063,6 +7777,23 @@ server <- function(input, output, session) {
         
         incProgress(0.1, detail = "准备数据...")
         
+        # 初始化代码记录器
+        code_recorder <- init_code_recorder()
+        
+        # 记录数据加载代码
+        if(!is.null(values$upload_filepath)) {
+          code_recorder <- record_data_loading(code_recorder, values$upload_filepath, values$sheet_name)
+        }
+        
+        # 记录数据预处理代码
+        code_recorder <- record_data_preprocessing(
+          code_recorder, 
+          selected_vars, 
+          input$temp_binary_method, 
+          input$temp_binary_encoding, 
+          group_var
+        )
+        
         cat("🚀 调用network_temperature_analysis函数...\n")
         cat("参数概要:\n")
         cat("  - 数据行数:", nrow(values$processed_data), "\n")
@@ -7088,6 +7819,30 @@ server <- function(input, output, session) {
         
         incProgress(0.8, detail = "生成结果...")
         
+        # 记录网络温度分析代码
+        code_recorder <- record_temperature_analysis(code_recorder, selected_vars, group_var)
+        
+        # 记录可视化代码
+        code_recorder <- record_visualization(code_recorder, selected_vars, group_var)
+        
+        # 记录结果导出代码
+        code_recorder <- record_exports(code_recorder, selected_vars)
+        
+        # 生成完整脚本并保存
+        if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
+          tryCatch({
+            script_path <- file.path(values$output_folder, "NetworkTemperatureAnalysis_Script.R")
+            generate_complete_script(code_recorder, script_path)
+            cat("📝 已生成完整R脚本:", script_path, "\n")
+            
+            # 保存代码记录器到结果中
+            temp_result$code_recorder <- code_recorder
+            temp_result$generated_script_path <- script_path
+          }, error = function(e) {
+            cat("⚠️ 脚本生成失败:", e$message, "\n")
+          })
+        }
+        
         values$temperature_result <- temp_result
         values$temperature_analysis_running <- FALSE
         
@@ -7099,6 +7854,17 @@ server <- function(input, output, session) {
         incProgress(1, detail = "完成!")
         
         showNotification("✅ 网络温度分析完成！请查看下方结果", type = "message", duration = 8)
+        
+        # 更新完整脚本（包含温度分析）
+        if(!is.null(values$code_recorder) && !is.null(values$output_folder)) {
+          tryCatch({
+            script_path <- file.path(values$output_folder, "NetworkAnalysis_Complete_Script.R")
+            generate_complete_script(values$code_recorder, script_path)
+            cat("📝 已更新完整脚本（包含温度分析）:", script_path, "\n")
+          }, error = function(e) {
+            cat("⚠️ 温度分析脚本更新失败:", e$message, "\n")
+          })
+        }
         
       })
       
@@ -7134,8 +7900,67 @@ server <- function(input, output, session) {
     
     result <- values$temperature_result
     
-    # 使用分析函数返回的summary
-    HTML(result$summary)
+    # 生成详细的温度分析解释
+    html_content <- paste0(
+      "<div class='panel panel-info'>",
+      "<div class='panel-heading'><h4>🌡️ 网络温度分析结果解释</h4></div>",
+      "<div class='panel-body'>",
+      
+      "<h5>📊 <strong>分析概述</strong></h5>",
+      "<p>网络温度 (T = 1/β) 反映了网络的稳定性和连接强度。温度越低，网络越稳定；温度越高，网络连接越不稳定。</p>",
+      
+      "<h5>🔬 <strong>8个模型的约束层级</strong></h5>",
+      "<ul>",
+      "<li><strong>M1-M2 (自由模型)</strong>: 每组独立估计所有参数，包括连接、阈值和温度</li>",
+      "<li><strong>M3-M4 (网络相等)</strong>: 两组共享相同的连接结构，但阈值和温度独立</li>",
+      "<li><strong>M5-M6 (网络+阈值相等)</strong>: 两组共享连接结构和阈值，但温度独立</li>",
+      "<li><strong>M7-M8 (完全相等)</strong>: 两组共享所有参数，包括温度</li>",
+      "</ul>",
+      
+      "<h5>📈 <strong>Dense vs Sparse策略</strong></h5>",
+      "<p><strong>Dense模型</strong>: 保留所有可能的连接；<strong>Sparse模型</strong>: 通过统计检验剪枝，保留显著连接。</p>",
+      
+      if(!is.null(result$models) && length(result$models) > 0) {
+        models <- result$models
+        first_model <- models[[1]]
+        params <- first_model@parameters
+        beta_params <- params[params$matrix == "beta", ]
+        groups <- unique(beta_params$group)
+        
+        # 使用与汇总信息一致的最佳模型选择逻辑
+        selected_best_model <- if(!is.null(result$comparison) && !is.null(result$comparison$best_model)) {
+          result$comparison$best_model
+        } else {
+          names(models)[1]  # 退尾方案
+        }
+        
+        if(length(groups) > 1) {
+          paste0(
+            "<h5>🏆 <strong>最佳模型选择</strong></h5>",
+            "<p>基于BIC准则，最佳模型为: <strong>", selected_best_model, "</strong></p>",
+            
+            "<h5>🌡️ <strong>组间温度对比</strong></h5>",
+            "<p>以下温度比较图展示了 <strong>", groups[1], "</strong> 组和 <strong>", groups[2], "</strong> 组在不同约束条件下的温度变化：</p>",
+            "<ul>",
+            "<li>如果两组温度相近，说明网络稳定性相似</li>",
+            "<li>如果某个约束层级下温度差异显著，说明该层级的参数存在组间差异</li>",
+            "<li>M7-M8模型温度相同是因为强制约束两组使用相同温度参数</li>",
+            "</ul>"
+          )
+        } else {
+          "<h5>🏆 <strong>单组分析结果</strong></h5><p>当前为单组网络温度分析。</p>"
+        }
+      } else {
+        ""
+      },
+      
+      "<h5>💡 <strong>临床意义</strong></h5>",
+      "<p>网络温度分析有助于理解不同群体的心理网络稳定性差异，为精准干预提供科学依据。温度较低的网络可能需要更强的干预才能产生变化。</p>",
+      
+      "</div></div>"
+    )
+    
+    HTML(html_content)
   })
   
   # 温度比较图
@@ -7168,110 +7993,114 @@ server <- function(input, output, session) {
       return()
     }
     
-    # 检查是否为多组分析
-    is_multigroup <- !is.null(result$is_multigroup) && result$is_multigroup
+    # 无论是否为多组分析，都显示统一的温度比较结果
+    # 多组分析中分组信息已经包含在模型拟合中，结果为统一的综合模型
+    temperatures <- sapply(metrics, function(x) x$temperature)
+    temperatures <- temperatures[!is.na(temperatures)]
     
-    if(is_multigroup) {
-      # 多组分析：显示各组别在不同模型下的温度对比
+    if(length(temperatures) == 0) {
+      plot.new()
+      text(0.5, 0.5, "温度数据不可用", cex = 1.5, col = "gray")
+      return()
+    }
+    
+    # 创建温度比较条形图，缩短模型名称
+    # 缩短模型名称以便显示
+    short_names <- names(temperatures)
+    short_names <- gsub("_Free_Dense", "_Free", short_names)
+    short_names <- gsub("_Free_Sparse", "_Sparse", short_names)
+    short_names <- gsub("_Equal_Dense", "_Dense", short_names)
+    short_names <- gsub("_Equal_Sparse", "_Sparse", short_names)
+    short_names <- gsub("Omega_", "ω_", short_names)
+    short_names <- gsub("Tau_", "τ_", short_names)
+    short_names <- gsub("Beta_", "β_", short_names)
+    
+    par(mar = c(5, 10, 4, 2))  # 增加左边距以适应模型名
+    bars <- barplot(temperatures, 
+                    names.arg = short_names,
+                    horiz = TRUE,
+                    col = rainbow(length(temperatures), alpha = 0.7),
+                    main = "Network Temperature Comparison\n(8 Constraint Models)",
+                    xlab = "Temperature (T = 1/β)",
+                    las = 1,
+                    cex.names = 0.7)  # 略微减小字体
+    
+    # 添加数值标签
+    text(temperatures + max(temperatures) * 0.02, 
+         bars, 
+         round(temperatures, 3), 
+         pos = 4, cex = 0.8)
+    
+    # 保存Fig4a到结果文件夹
+    if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
       tryCatch({
-        models <- result$models
-        if(length(models) == 0) {
-          plot.new()
-          text(0.5, 0.5, "无模型数据", cex = 1.5, col = "gray")
-          return()
-        }
+        timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+        fig4a_path <- file.path(values$output_folder, "Fig4a_temperature_comparison.pdf")
         
-        # 提取各组温度数据
-        model_names <- names(models)
-        temp_data <- data.frame(Model = character(), Group = character(), Temperature = numeric(), stringsAsFactors = FALSE)
+        pdf(fig4a_path, width = 10, height = 6)  # 增加宽度以适应模型名
         
-        for(model_name in model_names) {
-          model <- models[[model_name]]
-          # 获取beta参数
-          params <- model@parameters
-          beta_params <- params[params$matrix == "beta", ]
-          
-          if(nrow(beta_params) > 0) {
-            # 按组别提取温度
-            groups <- unique(beta_params$group)
-            for(group in groups) {
-              group_betas <- beta_params[beta_params$group == group, "est"]
-              if(length(group_betas) > 0) {
-                group_temp <- 1 / mean(group_betas, na.rm = TRUE)
-                temp_data <- rbind(temp_data, data.frame(
-                  Model = model_name, 
-                  Group = group, 
-                  Temperature = group_temp,
-                  stringsAsFactors = FALSE
-                ))
-              }
+        # 缩短模型名称
+        short_names <- names(temperatures)
+        short_names <- gsub("_Free_Dense", "_Free", short_names)
+        short_names <- gsub("_Free_Sparse", "_Sparse", short_names)
+        short_names <- gsub("_Equal_Dense", "_Dense", short_names)
+        short_names <- gsub("_Equal_Sparse", "_Sparse", short_names)
+        short_names <- gsub("Omega_", "ω_", short_names)
+        short_names <- gsub("Tau_", "τ_", short_names)
+        short_names <- gsub("Beta_", "β_", short_names)
+        
+        par(mar = c(5, 10, 4, 2))
+        bars <- barplot(temperatures, 
+                        names.arg = short_names,
+                        horiz = TRUE,
+                        col = rainbow(length(temperatures), alpha = 0.7),
+                        main = "Network Temperature Comparison\n(8 Constraint Models)",
+                        xlab = "Temperature (T = 1/β)",
+                        las = 1,
+                        cex.names = 0.7)
+        text(temperatures + max(temperatures) * 0.02, bars, round(temperatures, 3), pos = 4, cex = 0.8)
+        dev.off()
+        
+        cat("  已保存Fig4a:", fig4a_path, "\n")
+        
+        # 同时导出CSV文件，包含所有模型的网络指标
+        tryCatch({
+          if(!is.null(result$metrics) && length(result$metrics) > 0) {
+            # 准备数据框
+            metrics_df <- data.frame()
+            
+            for(model_name in names(result$metrics)) {
+              metric <- result$metrics[[model_name]]
+              row_data <- data.frame(
+                Model = model_name,
+                Temperature = round(metric$temperature %||% NA, 4),
+                Global_Strength = round(metric$global_strength %||% NA, 4),
+                Network_Density = round(metric$density %||% NA, 4),
+                Connectivity = round(metric$connectivity %||% NA, 4),
+                Network_Entropy = round(metric$entropy %||% NA, 4),
+                Clustering_Coefficient = round(metric$clustering %||% NA, 4),
+                Number_of_Nodes = metric$n_nodes %||% NA,
+                Model_AIC = round(metric$AIC %||% NA, 2),
+                Model_BIC = round(metric$BIC %||% NA, 2),
+                CFI = round(metric$CFI %||% NA, 4),
+                RMSEA = round(metric$RMSEA %||% NA, 4),
+                stringsAsFactors = FALSE
+              )
+              metrics_df <- rbind(metrics_df, row_data)
             }
+            
+            # 保存CSV文件
+            csv_path <- file.path(values$output_folder, "Fig4_temperature_network_metrics.csv")
+            write.csv(metrics_df, csv_path, row.names = FALSE, fileEncoding = "UTF-8")
+            cat("  已导出CSV数据:", csv_path, "\n")
           }
-        }
-        
-        if(nrow(temp_data) == 0) {
-          plot.new()
-          text(0.5, 0.5, "无法提取多组温度数据", cex = 1.2, col = "orange")
-          return()
-        }
-        
-        # 重塑数据为矩阵格式进行绘图
-        temp_matrix <- reshape(temp_data, idvar = "Model", timevar = "Group", direction = "wide")
-        rownames(temp_matrix) <- temp_matrix$Model
-        temp_matrix <- temp_matrix[, -1, drop = FALSE]  # 移除Model列
-        colnames(temp_matrix) <- gsub("Temperature.", "", colnames(temp_matrix))
-        temp_matrix <- as.matrix(temp_matrix)
-        
-        # 创建分组比较的条形图
-        par(mar = c(8, 6, 4, 8))
-        colors <- c("#4285F4", "#EA4335", "#FBBC04", "#34A853")  # Google色彩
-        barplot(t(temp_matrix), 
-                beside = TRUE,
-                col = colors[1:ncol(temp_matrix)],
-                main = "多组网络温度比较\n(按模型和组别)",
-                xlab = "",
-                ylab = "温度值 (T = 1/β)",
-                las = 2,
-                cex.names = 0.7,
-                legend.text = colnames(temp_matrix),
-                args.legend = list(x = "topright", inset = c(-0.15, 0), cex = 0.8))
-        
-        # 添加X轴标签
-        mtext("模型类型", side = 1, line = 6, cex = 1)
+        }, error = function(e) {
+          cat("  CSV导出失败:", e$message, "\n")
+        })
         
       }, error = function(e) {
-        cat("多组温度图绘制错误:", e$message, "\n")
-        plot.new()
-        text(0.5, 0.5, paste("多组图表失败:", e$message), cex = 1, col = "red")
+        cat("  Fig4a保存失败:", e$message, "\n")
       })
-      
-    } else {
-      # 单组分析：原有逻辑
-      temperatures <- sapply(metrics, function(x) x$temperature)
-      temperatures <- temperatures[!is.na(temperatures)]
-      
-      if(length(temperatures) == 0) {
-        plot.new()
-        text(0.5, 0.5, "温度数据不可用", cex = 1.5, col = "gray")
-        return()
-      }
-      
-      # 创建温度比较条形图
-      par(mar = c(5, 8, 4, 2))
-      barplot(temperatures, 
-              names.arg = names(temperatures),
-              horiz = TRUE,
-              col = rainbow(length(temperatures), alpha = 0.7),
-              main = "网络温度比较",
-              xlab = "温度值 (T = 1/β)",
-              las = 1,
-              cex.names = 0.8)
-      
-      # 添加数值标签
-      text(temperatures + max(temperatures) * 0.02, 
-           seq_along(temperatures), 
-           round(temperatures, 3), 
-           pos = 4, cex = 0.8)
     }
   })
   
@@ -7298,89 +8127,103 @@ server <- function(input, output, session) {
     cat("  temperature_result存在且成功，继续渲染...\n")
     
     result <- values$temperature_result
-    is_multigroup <- !is.null(result$is_multigroup) && result$is_multigroup
     
-    # 尝试从模型中提取omega矩阵
+    # 计算并显示症状协方差矩阵热图 (参考calculate_temperature.R 第166-174行)
     tryCatch({
-      models <- result$models
-      
-      if(length(models) == 0) {
+      # 获取分析数据来计算协方差矩阵
+      if(is.null(values$processed_data) || is.null(values$final_variables)) {
         plot.new()
-        text(0.5, 0.5, "无模型数据", cex = 1.5, col = "gray")
+        text(0.5, 0.5, "缺少数据或变量信息", cex = 1.5, col = "gray")
         return()
       }
       
-      # 选择第一个可用模型
-      first_model <- models[[1]]
+      # 提取分析变量的数据
+      analysis_data <- values$processed_data[, values$final_variables, drop = FALSE]
       
-      # 提取omega矩阵
-      omega_matrices <- psychonetrics::getmatrix(first_model, "omega")
+      # 移除缺失值
+      analysis_data <- na.omit(analysis_data)
       
-      if(is_multigroup && is.list(omega_matrices)) {
-        # 多组分析：根据用户选择显示特定组别
-        selected_group <- input$heatmap_group_select
-        
-        # 获取组别列表
-        params <- first_model@parameters
-        beta_params <- params[params$matrix == "beta", ]
-        groups <- unique(beta_params$group)
-        
-        cat("  热图 - 可用组别:", paste(groups, collapse = ", "), "\n")
-        cat("  热图 - 用户选择:", selected_group, "\n")
-        
-        if(!is.null(selected_group) && selected_group %in% groups) {
-          group_index <- which(groups == selected_group)
-          if(group_index <= length(omega_matrices)) {
-            omega_matrix <- omega_matrices[[group_index]]
-            plot_title <- paste0("网络连接强度热图 - ", selected_group)
-            cat("  热图 - 使用组别", selected_group, "的矩阵 (索引", group_index, ")\n")
-          } else {
-            omega_matrix <- omega_matrices[[1]]
-            plot_title <- paste0("网络连接强度热图 - ", groups[1], " (默认)")
-            cat("  热图 - 索引超出范围，使用默认第一个\n")
-          }
-        } else {
-          omega_matrix <- omega_matrices[[1]]
-          if(length(groups) > 0) {
-            plot_title <- paste0("网络连接强度热图 - ", groups[1], " (默认)")
-          } else {
-            plot_title <- "网络连接强度热图 - 组别1 (默认)"
-          }
-          cat("  热图 - 未选择或无效选择，使用默认第一个\n")
-        }
-      } else {
-        # 单组分析或提取失败的情况
-        if(is.list(omega_matrices)) {
-          omega_matrix <- omega_matrices[[1]]
-        } else {
-          omega_matrix <- omega_matrices
-        }
-        plot_title <- "网络连接强度热图"
-        cat("  热图 - 单组分析模式\n")
-      }
-      
-      if(is.null(omega_matrix) || !is.matrix(omega_matrix)) {
+      if(nrow(analysis_data) == 0) {
         plot.new()
-        text(0.5, 0.5, "矩阵提取失败", cex = 1.5, col = "gray")
+        text(0.5, 0.5, "数据为空", cex = 1.5, col = "gray")
         return()
       }
       
-      # 创建热图
-      if(requireNamespace("corrplot", quietly = TRUE)) {
-        corrplot::corrplot(omega_matrix, 
-                          method = "color",
-                          type = "upper",
-                          order = "hclust",
-                          title = plot_title,
-                          tl.cex = 0.8,
-                          tl.col = "black",
-                          mar = c(0,0,2,0))
+      # 计算协方差矩阵 (参考calculate_temperature.R)
+      cov_matrix <- cov(analysis_data, use = "complete.obs")
+      
+      if(is.null(cov_matrix) || !is.matrix(cov_matrix)) {
+        plot.new()
+        text(0.5, 0.5, "协方差矩阵计算失败", cex = 1.5, col = "gray")
+        return()
+      }
+      
+      # 设置变量名称标签
+      var_names <- values$final_variables
+      rownames(cov_matrix) <- var_names
+      colnames(cov_matrix) <- var_names
+      
+      cat("  热图 - 使用症状协方差矩阵 (", nrow(cov_matrix), "x", ncol(cov_matrix), ")\n")
+      
+      # 创建症状协方差热图 (参考calculate_temperature.R风格)
+      if(requireNamespace("viridis", quietly = TRUE)) {
+        # 使用基础R heatmap with viridis colors (参考calculate_temperature.R第170-174行)
+        par(mar = c(8, 8, 4, 2))
+        heatmap(cov_matrix, 
+                symm = TRUE,
+                col = viridis::cividis(100),
+                Rowv = NA,
+                main = "Symptom Covariance Matrix Heatmap",
+                cexRow = 0.7,
+                cexCol = 0.7,
+                margins = c(10, 10))
       } else {
-        # 使用基础R绘制热图
-        heatmap(omega_matrix, 
-                main = plot_title,
+        # 备用热图
+        par(mar = c(8, 8, 4, 2))
+        heatmap(cov_matrix, 
+                main = "Symptom Covariance Matrix Heatmap",
                 col = heat.colors(20),
-                scale = "none")
+                scale = "none",
+                symm = TRUE,
+                cexRow = 0.7, 
+                cexCol = 0.7,
+                margins = c(10, 10))
+      }
+      
+      # 保存Fig4b到结果文件夹
+      if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
+        tryCatch({
+          timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+          fig4b_path <- file.path(values$output_folder, "Fig4b_temperature_heatmap.pdf")
+          
+          pdf(fig4b_path, width = 10, height = 8)
+          if(requireNamespace("viridis", quietly = TRUE)) {
+            par(mar = c(8, 8, 4, 2))
+            heatmap(cov_matrix, 
+                    symm = TRUE,
+                    col = viridis::plasma(100),
+                    Rowv = NA,
+                    main = "Symptom Covariance Matrix Heatmap",
+                    cexRow = 0.7,
+                    cexCol = 0.7,
+                    margins = c(10, 10))
+          } else {
+            par(mar = c(8, 8, 4, 2))
+            heatmap(cov_matrix, 
+                    main = "Symptom Covariance Matrix Heatmap",
+                    col = heat.colors(20),
+                    scale = "none",
+                    symm = TRUE,
+                    cexRow = 0.7, 
+                    cexCol = 0.7,
+                    margins = c(10, 10))
+          }
+          dev.off()
+          
+          cat("  已保存Fig4b:", fig4b_path, "\n")
+        }, error = function(e) {
+          cat("  Fig4b保存失败:", e$message, "\n")
+        })
       }
       
     }, error = function(e) {
@@ -7393,17 +8236,29 @@ server <- function(input, output, session) {
   output$temp_group1_network <- renderPlot({
     cat("🖥️ 渲染组别1网络图...\n")
     
-    # 检查是否有主网络分析结果和温度分析结果
-    if(is.null(values$network_result) || is.null(values$temperature_result) || 
-       !values$temperature_result$success) {
+    # 检查基本条件
+    if(is.null(values$temperature_result) || !values$temperature_result$success ||
+       is.null(values$final_variables) || is.null(values$processed_data)) {
       plot.new()
-      text(0.5, 0.5, "需要先运行主网络分析和温度分析", cex = 1.2, col = "gray")
+      text(0.5, 0.5, "需要完成变量选择和温度分析", cex = 1.2, col = "gray")
       return()
     }
     
     tryCatch({
       # 检查是否为多组分析
-      is_multigroup <- !is.null(values$temperature_result$is_multigroup) && values$temperature_result$is_multigroup
+      models <- values$temperature_result$models
+      if(is.null(models) || length(models) == 0) {
+        plot.new()
+        text(0.5, 0.5, "无模型数据", cex = 1.2, col = "gray")
+        return()
+      }
+      
+      # 从模型参数中获取组别信息
+      first_model <- models[[1]]
+      params <- first_model@parameters
+      beta_params <- params[params$matrix == "beta", ]
+      groups <- unique(beta_params$group)
+      is_multigroup <- length(groups) > 1
       
       if(!is_multigroup) {
         plot.new()
@@ -7411,27 +8266,22 @@ server <- function(input, output, session) {
         return()
       }
       
-      # 获取组别信息
-      models <- values$temperature_result$models
-      if(length(models) > 0) {
-        first_model <- models[[1]]
-        params <- first_model@parameters
-        beta_params <- params[params$matrix == "beta", ]
-        groups <- unique(beta_params$group)
-        group1_name <- if(length(groups) >= 1) groups[1] else "组别1"
-      } else {
-        group1_name <- "组别1"
+      group1_name <- groups[1]
+      cat("  组别1网络图 - 组别名称:", group1_name, "\n")
+      
+      # 获取分组变量名称
+      group_var <- NULL
+      if(!is.null(values$temperature_result$parameters)) {
+        group_var <- values$temperature_result$parameters$group_var
       }
       
-      # 获取分组变量
-      group_var <- values$temperature_result$parameters$group_var
       if(is.null(group_var)) {
         plot.new()
         text(0.5, 0.5, "未找到分组变量", cex = 1.2, col = "orange")
         return()
       }
       
-      # 从主数据集中提取组别1的数据
+      # 从原始数据中提取组别1的数据子集
       full_data <- values$processed_data
       group1_data <- full_data[full_data[[group_var]] == group1_name, ]
       
@@ -7445,23 +8295,71 @@ server <- function(input, output, session) {
       analysis_vars <- values$final_variables
       group1_analysis_data <- group1_data[, analysis_vars, drop = FALSE]
       
-      # 使用与主网络相同的参数进行分析
-      cat("  为组别", group1_name, "重新运行quickNet分析...\n")
+      cat("  组别1数据维度:", nrow(group1_analysis_data), "x", ncol(group1_analysis_data), "\n")
       
-      # 继承主网络的所有参数
+      # 使用quickNet进行网络分析 - 继承主网络的配置
       network_args <- list(
         data = group1_analysis_data,
         threshold = input$threshold %||% 0.05,
         edge.labels = TRUE,
-        colors = values$network_group_colors,
-        groups = values$variable_groups,
-        layout = "spring"  # 使用独立的layout
+        layout = values$layout %||% "spring"  # 继承主网络的layout
       )
       
+      # 继承节点分组和颜色配置
+      if(!is.null(values$variable_groups) && !is.null(values$network_group_colors)) {
+        cat("  继承分组配置: groups =", length(values$variable_groups), "个组别\n")
+        cat("  继承颜色配置: colors =", length(values$network_group_colors), "种颜色\n")
+        
+        # 确保格式正确
+        network_args$groups <- values$variable_groups
+        network_args$colors <- values$network_group_colors
+        
+        # 调试信息
+        cat("  groups类型:", class(network_args$groups), "\n")
+        cat("  colors类型:", class(network_args$colors), "\n")
+        
+        # 转换为正确格式
+        if(is.factor(network_args$groups)) {
+          network_args$groups <- as.character(network_args$groups)
+        }
+        if(!is.character(network_args$colors)) {
+          network_args$colors <- as.character(network_args$colors)
+        }
+      } else {
+        cat("  未找到分组配色信息，使用默认设置\n")
+      }
+      
       # 运行quickNet分析
+      cat("  运行quickNet分析...\n")
+      cat("  最终参数:", paste(names(network_args), collapse = ", "), "\n")
       group1_network <- do.call(quickNet::quickNet, network_args)
       
-      # 直接绘制网络图（quickNet已经处理了可视化）
+      # 保存组别1网络结果（用于导出）
+      values$group1_network_result <- group1_network
+      
+      # 使用get_network_plot保存FigS4a结果
+      tryCatch({
+        if(requireNamespace("quickNet", quietly = TRUE) && !is.null(values$output_folder)) {
+          timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+          prefix <- paste0("FigS4a_group1_network_", timestamp)
+          
+          # 切换到输出文件夹
+          old_wd <- getwd()
+          setwd(values$output_folder)
+          on.exit(setwd(old_wd))
+          
+          # 调用get_network_plot保存图片
+          get_network_plot(group1_network, 
+                         prefix = prefix, 
+                         width = 6, height = 4.5)
+          
+          cat("  已保存组别1网络图:", file.path(values$output_folder, paste0(prefix, "_network_plot.pdf")), "\n")
+        }
+      }, error = function(e) {
+        cat("  FigS4a保存失败:", e$message, "\n")
+      })
+      
+      # 直接绘制网络图
       plot(group1_network, main = paste0(group1_name, " 网络图"))
       
     }, error = function(e) {
@@ -7475,17 +8373,29 @@ server <- function(input, output, session) {
   output$temp_group2_network <- renderPlot({
     cat("🖥️ 渲染组别2网络图...\n")
     
-    # 检查是否有主网络分析结果和温度分析结果
-    if(is.null(values$network_result) || is.null(values$temperature_result) || 
-       !values$temperature_result$success) {
+    # 检查基本条件
+    if(is.null(values$temperature_result) || !values$temperature_result$success ||
+       is.null(values$final_variables) || is.null(values$processed_data)) {
       plot.new()
-      text(0.5, 0.5, "需要先运行主网络分析和温度分析", cex = 1.2, col = "gray")
+      text(0.5, 0.5, "需要完成变量选择和温度分析", cex = 1.2, col = "gray")
       return()
     }
     
     tryCatch({
       # 检查是否为多组分析
-      is_multigroup <- !is.null(values$temperature_result$is_multigroup) && values$temperature_result$is_multigroup
+      models <- values$temperature_result$models
+      if(is.null(models) || length(models) == 0) {
+        plot.new()
+        text(0.5, 0.5, "无模型数据", cex = 1.2, col = "gray")
+        return()
+      }
+      
+      # 从模型参数中获取组别信息
+      first_model <- models[[1]]
+      params <- first_model@parameters
+      beta_params <- params[params$matrix == "beta", ]
+      groups <- unique(beta_params$group)
+      is_multigroup <- length(groups) > 1
       
       if(!is_multigroup) {
         plot.new()
@@ -7493,17 +8403,9 @@ server <- function(input, output, session) {
         return()
       }
       
-      # 获取组别信息
-      models <- values$temperature_result$models
-      if(length(models) > 0) {
-        first_model <- models[[1]]
-        params <- first_model@parameters
-        beta_params <- params[params$matrix == "beta", ]
-        groups <- unique(beta_params$group)
-        group2_name <- if(length(groups) >= 2) groups[2] else "组别2"
-      } else {
-        group2_name <- "组别2"
-      }
+      # 获取第二个组别的名称
+      group2_name <- if(length(groups) >= 2) groups[2] else "组别2"
+      cat("  组别2网络图 - 组别名称:", group2_name, "\n")
       
       # 获取分组变量
       group_var <- values$temperature_result$parameters$group_var
@@ -7527,21 +8429,69 @@ server <- function(input, output, session) {
       analysis_vars <- values$final_variables
       group2_analysis_data <- group2_data[, analysis_vars, drop = FALSE]
       
-      # 使用与主网络相同的参数进行分析
-      cat("  为组别", group2_name, "重新运行quickNet分析...\n")
+      cat("  组别2数据维度:", nrow(group2_analysis_data), "x", ncol(group2_analysis_data), "\n")
       
-      # 继承主网络的所有参数
+      # 使用quickNet进行网络分析 - 继承主网络的配置
       network_args <- list(
         data = group2_analysis_data,
         threshold = input$threshold %||% 0.05,
         edge.labels = TRUE,
-        colors = values$network_group_colors,
-        groups = values$variable_groups,
-        layout = "spring"  # 使用独立的layout
+        layout = values$layout %||% "spring"  # 继承主网络的layout
       )
       
+      # 继承节点分组和颜色配置
+      if(!is.null(values$variable_groups) && !is.null(values$network_group_colors)) {
+        cat("  继承分组配置: groups =", length(values$variable_groups), "个组别\n")
+        cat("  继承颜色配置: colors =", length(values$network_group_colors), "种颜色\n")
+        
+        # 确保格式正确
+        network_args$groups <- values$variable_groups
+        network_args$colors <- values$network_group_colors
+        
+        # 调试信息
+        cat("  groups类型:", class(network_args$groups), "\n")
+        cat("  colors类型:", class(network_args$colors), "\n")
+        
+        # 转换为正确格式
+        if(is.factor(network_args$groups)) {
+          network_args$groups <- as.character(network_args$groups)
+        }
+        if(!is.character(network_args$colors)) {
+          network_args$colors <- as.character(network_args$colors)
+        }
+      } else {
+        cat("  未找到分组配色信息，使用默认设置\n")
+      }
+      
       # 运行quickNet分析
+      cat("  运行quickNet分析...\n")
+      cat("  最终参数:", paste(names(network_args), collapse = ", "), "\n")
       group2_network <- do.call(quickNet::quickNet, network_args)
+      
+      # 保存组别2网络结果（用于导出）
+      values$group2_network_result <- group2_network
+      
+      # 使用get_network_plot保存FigS4b结果
+      tryCatch({
+        if(requireNamespace("quickNet", quietly = TRUE) && !is.null(values$output_folder)) {
+          timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+          prefix <- paste0("FigS4b_group2_network_", timestamp)
+          
+          # 切换到输出文件夹
+          old_wd <- getwd()
+          setwd(values$output_folder)
+          on.exit(setwd(old_wd))
+          
+          # 调用get_network_plot保存图片
+          get_network_plot(group2_network, 
+                         prefix = prefix, 
+                         width = 6, height = 4.5)
+          
+          cat("  已保存组别2网络图:", file.path(values$output_folder, paste0(prefix, "_network_plot.pdf")), "\n")
+        }
+      }, error = function(e) {
+        cat("  FigS4b保存失败:", e$message, "\n")
+      })
       
       # 直接绘制网络图（quickNet已经处理了可视化）
       plot(group2_network, main = paste0(group2_name, " 网络图"))
@@ -7553,6 +8503,69 @@ server <- function(input, output, session) {
     })
   })
   
+  # 组别网络图下载处理器
+  output$download_group1_network <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("FigS4a_group1_network_", timestamp, ".pdf")
+    },
+    content = function(file) {
+      tryCatch({
+        # 优先使用get_network_plot生成的PDF文件
+        expected_path <- file.path(values$output_folder, 
+                                  paste0("FigS4a_group1_network_", values$upload_timestamp, "_network_plot.pdf"))
+        if(!is.null(expected_path) && file.exists(expected_path)) {
+          file.copy(expected_path, file)
+        } else if(!is.null(values$group1_network_result)) {
+          # 备用：重新生成PDF
+          pdf(file, width = 8, height = 6)
+          plot(values$group1_network_result, main = "组别1网络图")
+          dev.off()
+        } else {
+          stop("组别1网络图数据不可用")
+        }
+      }, error = function(e) {
+        showNotification(paste("下载失败:", e$message), type = "error")
+        # 创建错误文档
+        pdf(file, width = 8, height = 6)
+        plot.new()
+        text(0.5, 0.5, paste("下载失败:", e$message), cex = 1.5)
+        dev.off()
+      })
+    }
+  )
+  
+  output$download_group2_network <- downloadHandler(
+    filename = function() {
+      timestamp <- if(!is.null(values$upload_timestamp)) values$upload_timestamp else format(Sys.time(), "%Y%m%d_%H%M%S")
+      paste0("FigS4b_group2_network_", timestamp, ".pdf")
+    },
+    content = function(file) {
+      tryCatch({
+        # 优先使用get_network_plot生成的PDF文件
+        expected_path <- file.path(values$output_folder, 
+                                  paste0("FigS4b_group2_network_", values$upload_timestamp, "_network_plot.pdf"))
+        if(!is.null(expected_path) && file.exists(expected_path)) {
+          file.copy(expected_path, file)
+        } else if(!is.null(values$group2_network_result)) {
+          # 备用：重新生成PDF
+          pdf(file, width = 8, height = 6)
+          plot(values$group2_network_result, main = "组别2网络图")
+          dev.off()
+        } else {
+          stop("组别2网络图数据不可用")
+        }
+      }, error = function(e) {
+        showNotification(paste("下载失败:", e$message), type = "error")
+        # 创建错误文档
+        pdf(file, width = 8, height = 6)
+        plot.new()
+        text(0.5, 0.5, paste("下载失败:", e$message), cex = 1.5)
+        dev.off()
+      })
+    }
+  )
+
   # 修正temp_analysis_summary以匹配实际数据结构
   output$temp_analysis_summary <- renderUI({
     req(values$temperature_result)
@@ -7563,18 +8576,138 @@ server <- function(input, output, session) {
     
     result <- values$temperature_result
     params <- result$parameters
+    metrics <- result$metrics
+    
+    # 提取温度统计信息
+    temperatures <- sapply(metrics, function(x) x$temperature)
+    temperatures <- temperatures[!is.na(temperatures)]
+    
+    # 计算温度统计量
+    temp_stats <- if(length(temperatures) > 0) {
+      list(
+        mean = mean(temperatures, na.rm = TRUE),
+        min = min(temperatures, na.rm = TRUE),
+        max = max(temperatures, na.rm = TRUE),
+        range = max(temperatures, na.rm = TRUE) - min(temperatures, na.rm = TRUE)
+      )
+    } else { NULL }
+    
+    # 提取模型比较信息
+    best_model_info <- ""
+    best_model_name <- ""
+    if(!is.null(result$comparison) && !is.null(result$comparison$best_model)) {
+      best_model <- result$comparison$best_model
+      best_model_name <- best_model  # 保存最佳模型名称
+      if(!is.null(metrics) && !is.null(metrics[[best_model]])) {
+        best_temp <- metrics[[best_model]]$temperature
+        if(!is.null(best_temp) && !is.na(best_temp)) {
+          best_model_info <- paste0(best_model, " (T = ", round(best_temp, 4), ")")
+        } else {
+          best_model_info <- best_model
+        }
+      } else {
+        best_model_info <- best_model
+      }
+    }
     
     # 基本信息显示
     tags$div(
-      tags$p(tags$strong("✅ 分析状态："), "完成"),
-      tags$p(tags$strong("📊 分析类型："), 
-             ifelse(is.null(params$group_var), "单组网络温度分析", "多组网络温度比较")),
-      tags$p(tags$strong("🔧 二值化方法："), params$binary_transform),
-      tags$p(tags$strong("📝 编码格式："), params$binary_encoding),
-      tags$p(tags$strong("📋 模型数量："), length(result$models)),
-      if(!is.null(result$comparison$best_model)) {
-        tags$p(tags$strong("🏆 最佳模型："), result$comparison$best_model)
-      }
+      tags$h4("📊 温度分析汇总", style = "color: #337ab7; margin-bottom: 15px;"),
+      
+      # 基本信息
+      tags$div(class = "row",
+        tags$div(class = "col-md-6",
+          tags$p(tags$strong("✅ 分析状态："), tags$span("完成", style = "color: green;")),
+          tags$p(tags$strong("📊 分析类型："), 
+                 ifelse(is.null(params$group_var), "单组网络温度分析", "多组网络温度比较")),
+          tags$p(tags$strong("🔧 二值化方法："), params$binary_transform),
+          tags$p(tags$strong("📝 编码格式："), params$binary_encoding)
+        ),
+        tags$div(class = "col-md-6",
+          tags$p(tags$strong("📋 模型数量："), length(result$models)),
+          tags$p(tags$strong("🎯 分析变量："), length(values$final_variables)),
+          tags$p(tags$strong("👥 样本数量："), nrow(values$processed_data)),
+          if(!is.null(best_model_info) && best_model_info != "") {
+            tags$p(tags$strong("🏆 最佳模型："), best_model_info)
+          } else {
+            tags$p(tags$strong("🏆 最佳模型："), "待确定")
+          }
+        )
+      ),
+      
+      # 网络结构指标
+      if(!is.null(metrics) && length(metrics) > 0) {
+        # 从最佳模型提取网络指标
+        best_metrics <- NULL
+        if(!is.null(result$comparison) && !is.null(result$comparison$best_model) && !is.null(metrics)) {
+          best_model_idx <- result$comparison$best_model
+          if(!is.null(metrics[[best_model_idx]])) {
+            best_metrics <- metrics[[best_model_idx]]
+          }
+        }
+        
+        # 如果没有找到最佳模型的指标，使用第一个可用的
+        if(is.null(best_metrics) && !is.null(metrics) && length(metrics) > 0) {
+          for(i in seq_along(metrics)) {
+            if(!is.null(metrics[[i]])) {
+              best_metrics <- metrics[[i]]
+              break
+            }
+          }
+        }
+        
+        if(!is.null(best_metrics)) {
+          tags$div(
+            tags$h5("🌐 网络结构指标 (最佳模型)", style = "color: #d9534f; margin-top: 20px;"),
+            tags$div(class = "row",
+              tags$div(class = "col-md-3",
+                tags$p(tags$strong("网络温度："), 
+                       tags$code(if(!is.null(best_metrics$temperature) && !is.na(best_metrics$temperature)) round(best_metrics$temperature, 4) else "N/A"))
+              ),
+              tags$div(class = "col-md-3",
+                tags$p(tags$strong("全局强度："), 
+                       tags$code(if(!is.null(best_metrics$global_strength) && !is.na(best_metrics$global_strength)) round(best_metrics$global_strength, 4) else "N/A"))
+              ),
+              tags$div(class = "col-md-3",
+                tags$p(tags$strong("网络密度："), 
+                       tags$code(if(!is.null(best_metrics$density) && !is.na(best_metrics$density)) round(best_metrics$density, 4) else "N/A"))
+              ),
+              tags$div(class = "col-md-3",
+                tags$p(tags$strong("连接度："), 
+                       tags$code(if(!is.null(best_metrics$connectivity) && !is.na(best_metrics$connectivity)) round(best_metrics$connectivity, 4) else "N/A"))
+              )
+            ),
+            tags$div(class = "row", style = "margin-top: 10px;",
+              tags$div(class = "col-md-3",
+                tags$p(tags$strong("网络熵："), 
+                       tags$code(if(!is.null(best_metrics$entropy) && !is.na(best_metrics$entropy)) round(best_metrics$entropy, 4) else "N/A"))
+              ),
+              tags$div(class = "col-md-3",
+                tags$p(tags$strong("聚类系数："), 
+                       tags$code(if(!is.null(best_metrics$clustering) && !is.na(best_metrics$clustering)) round(best_metrics$clustering, 4) else "N/A"))
+              ),
+              tags$div(class = "col-md-3",
+                tags$p(tags$strong("节点数："), 
+                       tags$code(if(!is.null(best_metrics$n_nodes) && !is.na(best_metrics$n_nodes)) best_metrics$n_nodes else "N/A"))
+              ),
+              tags$div(class = "col-md-3",
+                tags$p(tags$strong("模型BIC："), 
+                       tags$code(if(!is.null(best_metrics$BIC) && !is.na(best_metrics$BIC)) round(best_metrics$BIC, 2) else "N/A"))
+              )
+            )
+          )
+        }
+      },
+      
+      # 模型拟合信息
+      tags$div(
+        tags$h5("📈 模型拟合信息", style = "color: #5cb85c; margin-top: 20px;"),
+        tags$p("• M1-M2: 自由参数模型（所有参数独立估计）"),
+        tags$p("• M3-M4: 网络结构等同模型（ω参数相等）"),  
+        tags$p("• M5-M6: 网络结构+阈值等同模型（ω+τ参数相等）"),
+        tags$p("• M7-M8: 全参数等同模型（ω+τ+β参数相等）"),
+        tags$p(tags$em("注：偶数模型为稀疏版本，奇数模型为密集版本"))
+      )
     )
   })
   
