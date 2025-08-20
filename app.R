@@ -104,6 +104,7 @@ ui <- dashboardPage(
       menuItem("变量构造", tabName = "construct", icon = icon("calculator")),
       menuItem("变量选择", tabName = "variables", icon = icon("check-square")),
       menuItem("网络分析", tabName = "analysis", icon = icon("project-diagram")),
+      menuItem("网络温度分析", tabName = "temperature", icon = icon("thermometer-half")),
       menuItem("贝叶斯网络", tabName = "bayesian", icon = icon("brain")),
       menuItem("稳定性分析", tabName = "stability", icon = icon("chart-line")),
       menuItem("结果下载", tabName = "download", icon = icon("download")),
@@ -171,7 +172,7 @@ ui <- dashboardPage(
                 tags$h5("🧠 情绪与心理健康", style = "color: #00a65a; font-size: 15px;"),
                 tags$p("• PHQ-9 (抑郁症状筛查)", style = "margin: 2px 0;"),
                 tags$p("• GAD-7 (广泛性焦虑)", style = "margin: 2px 0;"),
-                tags$p("• ERS-21 (情绪反应性)", style = "margin: 2px 0;"),
+                tags$p("• ERS-21/6 (情绪反应性)", style = "margin: 2px 0;"),
                 tags$p("• DERS-16 (情绪调节困难)", style = "margin: 2px 0;"),
                 tags$p("• COPE-30 (应对方式)", style = "margin: 2px 0;"),
                 tags$p("• SES-10 (自尊量表)", style = "margin: 2px 0;"),
@@ -185,20 +186,24 @@ ui <- dashboardPage(
                 tags$p("• AUDIT-10 (酒精使用障碍)", style = "margin: 2px 0;"),
                 tags$p("• IAT-20 (网络成瘾)", style = "margin: 2px 0;"),
                 tags$p("• IGD-9SF (游戏障碍)", style = "margin: 2px 0;"),
+                tags$p("• SABAS-6 (智能手机成瘾)", style = "margin: 2px 0;"),
                 tags$p("• BSMAS-6 (社交媒体成瘾)", style = "margin: 2px 0;"),
+                tags$p("• SVAS-6 (短视频成瘾)", style = "margin: 2px 0;"),
+                tags$p("• INAS-6 (小说成瘾)", style = "margin: 2px 0;"),
+                tags$p("• OSA-6、CGPS-18 (购物成瘾)", style = "margin: 2px 0;"),
+                tags$p("• CSA-6 (色情成瘾)", style = "margin: 2px 0;"),
                 tags$p("• YFAS (食物成瘾13/16/35项)", style = "margin: 2px 0;"),
                 tags$p("• BIS-11 (冲动性量表)", style = "margin: 2px 0;"),
                 tags$p("• BISBAS-18 (行为抑制/激活)", style = "margin: 2px 0;"),
                 tags$p("• HRF-18系列 (习惯-奖赏-恐惧)", style = "margin: 2px 0;"),
-                tags$p("• CGPS-18 (游戏激情)", style = "margin: 2px 0;"),
-                tags$p("• PPC-12 (问题性手机使用)", style = "margin: 2px 0;")
+                tags$p("• DSMIGD9 (游戏激情)", style = "margin: 2px 0;")
               )
             ),
             div(style = "display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px; margin-top: 15px;",
               div(
                 tags$h5("🏠 人际关系与社会支持", style = "color: #00a65a; font-size: 15px;"),
                 tags$p("• IPPA-25 (亲子同伴依恋)", style = "margin: 2px 0;"),
-                tags$p("• Parenting (父母教养方式)", style = "margin: 2px 0;"),
+                tags$p("• SUMBU (父母教养方式)", style = "margin: 2px 0;"),
                 tags$p("• Friend-20 (朋友支持)", style = "margin: 2px 0;"),
                 tags$p("• FFSSS-10 (家庭经济支持)", style = "margin: 2px 0;"),
                 tags$p("• SSS-14 (社会支持)", style = "margin: 2px 0;"),
@@ -211,7 +216,7 @@ ui <- dashboardPage(
                 tags$p("• RICS-25 (疾病复原力)", style = "margin: 2px 0;"),
                 tags$p("• RISC-25 (复原力量表)", style = "margin: 2px 0;"),
                 tags$p("• RSCA-27 (成人复原力)", style = "margin: 2px 0;"),
-                tags$p("• EIS (情绪智力A23/B21)", style = "margin: 2px 0;"),
+                tags$p("• EIS (民族认同A23/B21)", style = "margin: 2px 0;"),
                 tags$p("• CSES-26 (儿童自尊)", style = "margin: 2px 0;")
               )
             ),
@@ -222,12 +227,13 @@ ui <- dashboardPage(
                 tags$p("• STBI-101 (自伤思维行为)", style = "margin: 2px 0;"),
                 tags$p("• PSQI-19 (睡眠质量)", style = "margin: 2px 0;"),
                 tags$p("• COVID-19 (疫情症状)", style = "margin: 2px 0;"),
-                tags$p("• MSSMHS-60 (中学生心理)", style = "margin: 2px 0;")
+                tags$p("• MSSMHS-60 (中学生心理)", style = "margin: 2px 0;"),
+                tags$p("• PPC-12 (精神分裂)", style = "margin: 2px 0;")
               ),
               div(
                 tags$h5("🍽️ 进食与其他行为", style = "color: #00a65a; font-size: 15px;"),
-                tags$p("• Cbed-10 (强迫性暴食)", style = "margin: 2px 0;"),
-                tags$p("• CNCS-10 (夜食综合征)", style = "margin: 2px 0;"),
+                tags$p("• YFAS (食物成瘾13/16/35项)", style = "margin: 2px 0;"),
+                tags$p("• CNCS-10 (邻里环境)", style = "margin: 2px 0;"),
                 tags$p("• BAS-10 (行为激活)", style = "margin: 2px 0;"),
                 tags$p("• FoMos-8 (购物错失恐惧)", style = "margin: 2px 0;"),
                 tags$p("• AAS-5 (动物态度)", style = "margin: 2px 0;"),
@@ -923,6 +929,216 @@ ui <- dashboardPage(
                   )
                 )
               )
+            )
+          )
+        )
+      ),
+      
+      # 网络温度分析页面
+      tabItem(
+        tabName = "temperature",
+        fluidRow(
+          # 参数设置区
+          box(
+            title = "🌡️ 网络温度分析设置", status = "primary", solidHeader = TRUE, width = 6,
+            
+            conditionalPanel(
+              condition = "!output.variablesConfirmed",
+              div(class = "text-center", style = "padding: 30px;",
+                icon("check-square", class = "fa-2x text-muted"), br(), br(),
+                h5("请先在变量选择页面确认分析变量", class = "text-muted"),
+                tags$small("建议流程：数据上传 → 变量构造 → 变量选择 → 网络温度分析")
+              )
+            ),
+            
+            conditionalPanel(
+              condition = "output.variablesConfirmed",
+              
+              # 二值化设置
+              h5("📊 数据二值化设置"),
+              wellPanel(
+                fluidRow(
+                  column(6,
+                    selectInput("temp_binary_method", "二值化方法",
+                               choices = list(
+                                 "中位数分割" = "median",
+                                 "均值分割" = "mean", 
+                                 "自定义阈值" = "custom",
+                                 "0-1标准化后分割" = "normalize",
+                                 "保持原值(如已二值化)" = "keep"
+                               ),
+                               selected = "median")
+                  ),
+                  column(6,
+                    selectInput("temp_binary_encoding", "编码格式",
+                               choices = list(
+                                 "0/1编码" = "01",
+                                 "-1/1编码" = "neg11"
+                               ),
+                               selected = "neg11")
+                  )
+                ),
+                
+                conditionalPanel(
+                  condition = "input.temp_binary_method == 'custom'",
+                  numericInput("temp_binary_threshold", "自定义阈值", 
+                              value = 0.5, min = -10, max = 10, step = 0.1)
+                ),
+                
+                tags$small("💡 ", tags$strong("提示："), 
+                          "Ising模型要求二值数据。中位数分割适用于大多数量表数据。")
+              ),
+              
+              # 分组设置（可选）
+              h5("👥 分组分析设置（可选）"),
+              wellPanel(
+                checkboxInput("enable_grouping", "启用分组分析", value = FALSE),
+                
+                conditionalPanel(
+                  condition = "input.enable_grouping",
+                  fluidRow(
+                    column(8,
+                      uiOutput("temp_group_var_selector")
+                    ),
+                    column(4,
+                      conditionalPanel(
+                        condition = "input.temp_group_var == 'Age'",
+                        numericInput("age_groups", "年龄分组数", 
+                                    value = 2, min = 2, max = 5, step = 1)
+                      )
+                    )
+                  ),
+                  tags$small("📝 ", tags$strong("说明："), 
+                            "启用分组后将进行多组Ising网络温度比较分析")
+                )
+              ),
+              
+              # 高级设置
+              h5("⚙️ 高级设置"),
+              wellPanel(
+                fluidRow(
+                  column(6,
+                    selectInput("temp_estimator", "估计方法",
+                               choices = list("最大似然估计 (ML)" = "ML"),
+                               selected = "ML")
+                  ),
+                  column(6,
+                    numericInput("temp_alpha", "显著性水平",
+                                value = 0.05, min = 0.01, max = 0.1, step = 0.01)
+                  )
+                )
+              ),
+              
+              br(),
+              actionButton("run_temperature_analysis", "🚀 开始网络温度分析", 
+                          class = "btn-primary btn-lg", style = "width: 100%;")
+            )
+          ),
+          
+          # 分析进度和状态
+          box(
+            title = "📈 分析进度", status = "info", solidHeader = TRUE, width = 6,
+            
+            conditionalPanel(
+              condition = "!output.temperatureAnalysisRunning && !output.temperatureAnalysisComplete",
+              div(class = "text-center", style = "padding: 50px;",
+                icon("play-circle", class = "fa-3x text-muted"), br(), br(),
+                h5("点击开始分析按钮运行网络温度分析", class = "text-muted")
+              )
+            ),
+            
+            conditionalPanel(
+              condition = "output.temperatureAnalysisRunning",
+              div(class = "text-center", style = "padding: 20px;",
+                div(class = "progress progress-striped active",
+                  div(class = "progress-bar progress-bar-primary", role = "progressbar", 
+                      style = "width: 100%", "分析进行中...")
+                ),
+                br(),
+                h5("🔥 正在进行网络温度分析...", class = "text-primary"),
+                tags$small("这可能需要几分钟时间，请耐心等待")
+              )
+            ),
+            
+            conditionalPanel(
+              condition = "output.temperatureAnalysisComplete",
+              div(
+                h5("✅ 分析完成！", class = "text-success"),
+                uiOutput("temp_analysis_summary"),
+                br(),
+                downloadButton("download_temp_results", "📥 下载完整结果", 
+                              class = "btn-success btn-sm")
+              )
+            ),
+            
+            conditionalPanel(
+              condition = "output.temperatureAnalysisError",
+              div(class = "alert alert-danger",
+                h5("❌ 分析失败"),
+                p("请检查数据格式和参数设置，然后重试。"),
+                verbatimTextOutput("temp_error_message")
+              )
+            )
+          )
+        ),
+        
+        # 结果展示区 - 无条件显示所有结果
+        fluidRow(
+          # 分析报告
+          box(
+            title = "📋 网络温度分析报告", status = "success", solidHeader = TRUE, width = 12,
+            htmlOutput("temperature_analysis_report"),
+            br(),
+            downloadButton("download_temp_report", "📄 下载分析报告", 
+                         class = "btn-primary btn-sm")
+          )
+        ),
+        
+        # 可视化结果
+        fluidRow(
+          # 温度比较图
+          box(
+            title = "🌡️ 网络温度比较", status = "primary", solidHeader = TRUE, width = 6,
+            plotOutput("temp_comparison_plot"),
+            br(),
+            downloadButton("download_temp_plot", "下载温度图", class = "btn-primary btn-sm")
+          ),
+          
+          # 网络热图
+          box(
+            title = "🔥 网络连接热图", status = "warning", solidHeader = TRUE, width = 6,
+            conditionalPanel(
+              condition = "input.enable_grouping",
+              selectInput("heatmap_group_select", "选择显示组别", choices = NULL)
+            ),
+            plotOutput("temp_network_heatmap"),
+            br(),
+            downloadButton("download_temp_heatmap", "下载热图", class = "btn-warning btn-sm")
+          )
+        ),
+        
+        # 多组分析时的分组网络图
+        conditionalPanel(
+          condition = "input.enable_grouping",
+          fluidRow(
+            # 组别1网络图
+            box(
+              title = "👨 组别1网络图", status = "info", solidHeader = TRUE, width = 6,
+              div(id = "group1_title", style = "font-weight: bold; margin-bottom: 10px;", 
+                  textOutput("group1_title_text", inline = TRUE)),
+              plotOutput("temp_group1_network"),
+              br(),
+              downloadButton("download_group1_network", "下载组别1网络图", class = "btn-info btn-sm")
+            ),
+            
+            # 组别2网络图  
+            box(
+              title = "👩 组别2网络图", status = "success", solidHeader = TRUE, width = 6,
+              div(id = "group2_title", style = "font-weight: bold; margin-bottom: 10px;", 
+                  textOutput("group2_title_text", inline = TRUE)),
+              plotOutput("temp_group2_network"),
+              br(),
+              downloadButton("download_group2_network", "下载组别2网络图", class = "btn-success btn-sm")
             )
           )
         )
@@ -5467,6 +5683,7 @@ server <- function(input, output, session) {
       
       # 保存最终选择的变量用于网络分析
       values$analysis_data <- values$processed_data[, final_variables, drop = FALSE]
+      values$final_variables <- final_variables  # 保存变量列表给温度分析使用
       values$variables_confirmed <- TRUE
       
       # 保存构建好的groups参数
@@ -6717,6 +6934,649 @@ server <- function(input, output, session) {
       writeLines(report_content, file)
     }
   )
+  
+  # 网络温度分析相关响应式输出
+  output$temp_group_var_selector <- renderUI({
+    req(values$processed_data)
+    
+    # 获取可用的分类变量
+    categorical_vars <- names(values$processed_data)[sapply(values$processed_data, function(x) 
+      is.character(x) || is.factor(x) || (is.numeric(x) && length(unique(x)) <= 10))]
+    
+    if(length(categorical_vars) == 0) {
+      return(div("暂无可用的分组变量"))
+    }
+    
+    selectInput("temp_group_var", "选择分组变量",
+               choices = setNames(categorical_vars, categorical_vars),
+               selected = if("Gender" %in% categorical_vars) "Gender" else categorical_vars[1])
+  })
+  
+  # 动态更新热图组别选择器和组别标题
+  observe({
+    if(!is.null(values$temperature_result) && values$temperature_result$success && 
+       !is.null(values$temperature_result$is_multigroup) && values$temperature_result$is_multigroup) {
+      
+      # 从温度分析结果中提取组别信息
+      tryCatch({
+        models <- values$temperature_result$models
+        if(length(models) > 0) {
+          first_model <- models[[1]]
+          params <- first_model@parameters
+          beta_params <- params[params$matrix == "beta", ]
+          
+          if(nrow(beta_params) > 0) {
+            groups <- unique(beta_params$group)
+            group_choices <- setNames(groups, paste0("组别", seq_along(groups), " (", groups, ")"))
+            
+            # 更新热图选择器
+            updateSelectInput(session, "heatmap_group_select",
+                            choices = group_choices,
+                            selected = groups[1])
+            
+            # 动态更新组别标题
+            if(length(groups) >= 1) {
+              group1_name <- groups[1]
+              output$group1_title_text <- renderText({
+                paste0("👨 ", group1_name, " 网络图")
+              })
+            }
+            
+            if(length(groups) >= 2) {
+              group2_name <- groups[2]
+              output$group2_title_text <- renderText({
+                paste0("👩 ", group2_name, " 网络图")
+              })
+            }
+          }
+        }
+      }, error = function(e) {
+        cat("更新热图组别选择器失败:", e$message, "\n")
+      })
+    }
+  })
+  
+  # 温度分析状态输出
+  output$temperatureAnalysisRunning <- reactive({
+    !is.null(values$temperature_analysis_running) && values$temperature_analysis_running
+  })
+  outputOptions(output, "temperatureAnalysisRunning", suspendWhenHidden = FALSE)
+  
+  output$temperatureAnalysisComplete <- reactive({
+    !is.null(values$temperature_result) && !is.null(values$temperature_result$success) && values$temperature_result$success
+  })
+  outputOptions(output, "temperatureAnalysisComplete", suspendWhenHidden = FALSE)
+  
+  output$temperatureAnalysisError <- reactive({
+    !is.null(values$temperature_error)
+  })
+  outputOptions(output, "temperatureAnalysisError", suspendWhenHidden = FALSE)
+  
+  output$showTempVisualizations <- reactive({
+    !is.null(values$temperature_result) && values$temperature_result$success
+  })
+  outputOptions(output, "showTempVisualizations", suspendWhenHidden = FALSE)
+  
+  # 网络温度分析按钮事件
+  observeEvent(input$run_temperature_analysis, {
+    
+    cat("🖐️ 用户点击了网络温度分析按钮\n")
+    
+    # 检查基本条件
+    if(is.null(values$processed_data)) {
+      showNotification("⚠️ 请先上传数据", type = "error", duration = 5)
+      return()
+    }
+    
+    if(is.null(values$final_variables) || length(values$final_variables) == 0) {
+      showNotification("⚠️ 请先在\"变量选择\"页面选择分析变量并点击\"确认选择\"", type = "error", duration = 10)
+      return()
+    }
+    
+    # 设置运行状态
+    values$temperature_analysis_running <- TRUE
+    values$temperature_error <- NULL
+    values$temperature_result <- NULL
+    
+    # 获取参数
+    selected_vars <- values$final_variables
+    group_var <- NULL
+    
+    if(input$enable_grouping && !is.null(input$temp_group_var)) {
+      group_var <- input$temp_group_var
+      
+      # 如果是年龄分组，需要创建年龄分组变量
+      if(group_var == "Age" && !is.null(input$age_groups)) {
+        age_groups <- input$age_groups
+        age_data <- values$processed_data$Age
+        age_breaks <- quantile(age_data, probs = seq(0, 1, length.out = age_groups + 1), na.rm = TRUE)
+        values$processed_data$AgeGroup <- cut(age_data, breaks = age_breaks, 
+                                            labels = paste0("Group", 1:age_groups), include.lowest = TRUE)
+        group_var <- "AgeGroup"
+        cat("创建年龄分组变量:", age_groups, "组\n")
+      }
+    }
+    
+    tryCatch({
+      
+      withProgress(message = '正在进行网络温度分析...', value = 0, {
+        
+        incProgress(0.1, detail = "准备数据...")
+        
+        cat("🚀 调用network_temperature_analysis函数...\n")
+        cat("参数概要:\n")
+        cat("  - 数据行数:", nrow(values$processed_data), "\n")
+        cat("  - 分析变量:", paste(selected_vars, collapse = ", "), "\n")
+        cat("  - 分组变量:", ifelse(is.null(group_var), "无", group_var), "\n")
+        cat("  - 二值化方法:", input$temp_binary_method, "\n")
+        cat("  - 编码方式:", input$temp_binary_encoding, "\n")
+        
+        incProgress(0.2, detail = "运行温度分析...")
+        
+        temp_result <- network_temperature_analysis(
+          data = values$processed_data,
+          group_var = group_var,
+          selected_vars = selected_vars,
+          binary_transform = input$temp_binary_method,
+          binary_encoding = input$temp_binary_encoding,
+          binary_threshold = input$temp_binary_threshold,
+          estimator = input$temp_estimator,
+          alpha = input$temp_alpha
+        )
+        
+        cat("✅ network_temperature_analysis函数返回正常\n")
+        
+        incProgress(0.8, detail = "生成结果...")
+        
+        values$temperature_result <- temp_result
+        values$temperature_analysis_running <- FALSE
+        
+        # 调试信息
+        cat("🔍 温度分析结果保存完成\n")
+        cat("结果success状态:", temp_result$success, "\n")
+        cat("temperatureAnalysisComplete应该为:", !is.null(values$temperature_result) && !is.null(values$temperature_result$success) && values$temperature_result$success, "\n")
+        
+        incProgress(1, detail = "完成!")
+        
+        showNotification("✅ 网络温度分析完成！请查看下方结果", type = "message", duration = 8)
+        
+      })
+      
+    }, error = function(e) {
+      cat("❌ 网络温度分析失败:", e$message, "\n")
+      values$temperature_error <- e$message
+      values$temperature_analysis_running <- FALSE
+      showNotification(paste("❌ 分析失败:", e$message), type = "error", duration = 10)
+    })
+  })
+  
+  # 温度分析摘要输出
+  
+  # 温度分析报告输出
+  output$temperature_analysis_report <- renderUI({
+    
+    cat("🖥️ 渲染温度分析报告...\n")
+    cat("  temperature_result是否为NULL:", is.null(values$temperature_result), "\n")
+    
+    if(is.null(values$temperature_result)) {
+      cat("  显示默认占位内容\n")
+      return(div(class = "text-center", style = "padding: 30px;",
+        icon("chart-bar", class = "fa-2x text-muted"), br(), br(),
+        h5("分析报告将在完成后显示", class = "text-muted")
+      ))
+    }
+    
+    cat("  temperature_result存在，success状态:", values$temperature_result$success, "\n")
+    
+    if(!values$temperature_result$success) {
+      return(div(class = "alert alert-danger", "分析失败，请检查参数设置"))
+    }
+    
+    result <- values$temperature_result
+    
+    # 使用分析函数返回的summary
+    HTML(result$summary)
+  })
+  
+  # 温度比较图
+  output$temp_comparison_plot <- renderPlot({
+    
+    cat("🖥️ 渲染温度比较图...\n")
+    cat("  temperature_result是否为NULL:", is.null(values$temperature_result), "\n")
+    
+    if(is.null(values$temperature_result)) {
+      cat("  显示默认图表\n")
+      plot.new()
+      text(0.5, 0.5, "点击\"开始网络温度分析\"运行分析", cex = 1.2, col = "gray")
+      return()
+    }
+    
+    cat("  temperature_result存在，success状态:", values$temperature_result$success, "\n")
+    
+    if(!values$temperature_result$success) {
+      plot.new()
+      text(0.5, 0.5, "分析失败", cex = 1.5, col = "red")
+      return()
+    }
+    
+    result <- values$temperature_result
+    metrics <- result$metrics
+    
+    if(length(metrics) == 0) {
+      plot.new()
+      text(0.5, 0.5, "无可视化数据", cex = 1.5, col = "gray")
+      return()
+    }
+    
+    # 检查是否为多组分析
+    is_multigroup <- !is.null(result$is_multigroup) && result$is_multigroup
+    
+    if(is_multigroup) {
+      # 多组分析：显示各组别在不同模型下的温度对比
+      tryCatch({
+        models <- result$models
+        if(length(models) == 0) {
+          plot.new()
+          text(0.5, 0.5, "无模型数据", cex = 1.5, col = "gray")
+          return()
+        }
+        
+        # 提取各组温度数据
+        model_names <- names(models)
+        temp_data <- data.frame(Model = character(), Group = character(), Temperature = numeric(), stringsAsFactors = FALSE)
+        
+        for(model_name in model_names) {
+          model <- models[[model_name]]
+          # 获取beta参数
+          params <- model@parameters
+          beta_params <- params[params$matrix == "beta", ]
+          
+          if(nrow(beta_params) > 0) {
+            # 按组别提取温度
+            groups <- unique(beta_params$group)
+            for(group in groups) {
+              group_betas <- beta_params[beta_params$group == group, "est"]
+              if(length(group_betas) > 0) {
+                group_temp <- 1 / mean(group_betas, na.rm = TRUE)
+                temp_data <- rbind(temp_data, data.frame(
+                  Model = model_name, 
+                  Group = group, 
+                  Temperature = group_temp,
+                  stringsAsFactors = FALSE
+                ))
+              }
+            }
+          }
+        }
+        
+        if(nrow(temp_data) == 0) {
+          plot.new()
+          text(0.5, 0.5, "无法提取多组温度数据", cex = 1.2, col = "orange")
+          return()
+        }
+        
+        # 重塑数据为矩阵格式进行绘图
+        temp_matrix <- reshape(temp_data, idvar = "Model", timevar = "Group", direction = "wide")
+        rownames(temp_matrix) <- temp_matrix$Model
+        temp_matrix <- temp_matrix[, -1, drop = FALSE]  # 移除Model列
+        colnames(temp_matrix) <- gsub("Temperature.", "", colnames(temp_matrix))
+        temp_matrix <- as.matrix(temp_matrix)
+        
+        # 创建分组比较的条形图
+        par(mar = c(8, 6, 4, 8))
+        colors <- c("#4285F4", "#EA4335", "#FBBC04", "#34A853")  # Google色彩
+        barplot(t(temp_matrix), 
+                beside = TRUE,
+                col = colors[1:ncol(temp_matrix)],
+                main = "多组网络温度比较\n(按模型和组别)",
+                xlab = "",
+                ylab = "温度值 (T = 1/β)",
+                las = 2,
+                cex.names = 0.7,
+                legend.text = colnames(temp_matrix),
+                args.legend = list(x = "topright", inset = c(-0.15, 0), cex = 0.8))
+        
+        # 添加X轴标签
+        mtext("模型类型", side = 1, line = 6, cex = 1)
+        
+      }, error = function(e) {
+        cat("多组温度图绘制错误:", e$message, "\n")
+        plot.new()
+        text(0.5, 0.5, paste("多组图表失败:", e$message), cex = 1, col = "red")
+      })
+      
+    } else {
+      # 单组分析：原有逻辑
+      temperatures <- sapply(metrics, function(x) x$temperature)
+      temperatures <- temperatures[!is.na(temperatures)]
+      
+      if(length(temperatures) == 0) {
+        plot.new()
+        text(0.5, 0.5, "温度数据不可用", cex = 1.5, col = "gray")
+        return()
+      }
+      
+      # 创建温度比较条形图
+      par(mar = c(5, 8, 4, 2))
+      barplot(temperatures, 
+              names.arg = names(temperatures),
+              horiz = TRUE,
+              col = rainbow(length(temperatures), alpha = 0.7),
+              main = "网络温度比较",
+              xlab = "温度值 (T = 1/β)",
+              las = 1,
+              cex.names = 0.8)
+      
+      # 添加数值标签
+      text(temperatures + max(temperatures) * 0.02, 
+           seq_along(temperatures), 
+           round(temperatures, 3), 
+           pos = 4, cex = 0.8)
+    }
+  })
+  
+  # 网络热图
+  output$temp_network_heatmap <- renderPlot({
+    
+    cat("🖥️ 渲染网络热图...\n")
+    cat("  temperature_result是否为NULL:", is.null(values$temperature_result), "\n")
+    
+    if(is.null(values$temperature_result)) {
+      cat("  显示默认热图\n")
+      plot.new()
+      text(0.5, 0.5, "点击\"开始网络温度分析\"运行分析", cex = 1.2, col = "gray")
+      return()
+    }
+    
+    if(!values$temperature_result$success) {
+      cat("  分析失败，显示错误信息\n")
+      plot.new()
+      text(0.5, 0.5, "分析失败", cex = 1.5, col = "red")
+      return()
+    }
+    
+    cat("  temperature_result存在且成功，继续渲染...\n")
+    
+    result <- values$temperature_result
+    is_multigroup <- !is.null(result$is_multigroup) && result$is_multigroup
+    
+    # 尝试从模型中提取omega矩阵
+    tryCatch({
+      models <- result$models
+      
+      if(length(models) == 0) {
+        plot.new()
+        text(0.5, 0.5, "无模型数据", cex = 1.5, col = "gray")
+        return()
+      }
+      
+      # 选择第一个可用模型
+      first_model <- models[[1]]
+      
+      # 提取omega矩阵
+      omega_matrices <- psychonetrics::getmatrix(first_model, "omega")
+      
+      if(is_multigroup && is.list(omega_matrices)) {
+        # 多组分析：根据用户选择显示特定组别
+        selected_group <- input$heatmap_group_select
+        
+        # 获取组别列表
+        params <- first_model@parameters
+        beta_params <- params[params$matrix == "beta", ]
+        groups <- unique(beta_params$group)
+        
+        cat("  热图 - 可用组别:", paste(groups, collapse = ", "), "\n")
+        cat("  热图 - 用户选择:", selected_group, "\n")
+        
+        if(!is.null(selected_group) && selected_group %in% groups) {
+          group_index <- which(groups == selected_group)
+          if(group_index <= length(omega_matrices)) {
+            omega_matrix <- omega_matrices[[group_index]]
+            plot_title <- paste0("网络连接强度热图 - ", selected_group)
+            cat("  热图 - 使用组别", selected_group, "的矩阵 (索引", group_index, ")\n")
+          } else {
+            omega_matrix <- omega_matrices[[1]]
+            plot_title <- paste0("网络连接强度热图 - ", groups[1], " (默认)")
+            cat("  热图 - 索引超出范围，使用默认第一个\n")
+          }
+        } else {
+          omega_matrix <- omega_matrices[[1]]
+          if(length(groups) > 0) {
+            plot_title <- paste0("网络连接强度热图 - ", groups[1], " (默认)")
+          } else {
+            plot_title <- "网络连接强度热图 - 组别1 (默认)"
+          }
+          cat("  热图 - 未选择或无效选择，使用默认第一个\n")
+        }
+      } else {
+        # 单组分析或提取失败的情况
+        if(is.list(omega_matrices)) {
+          omega_matrix <- omega_matrices[[1]]
+        } else {
+          omega_matrix <- omega_matrices
+        }
+        plot_title <- "网络连接强度热图"
+        cat("  热图 - 单组分析模式\n")
+      }
+      
+      if(is.null(omega_matrix) || !is.matrix(omega_matrix)) {
+        plot.new()
+        text(0.5, 0.5, "矩阵提取失败", cex = 1.5, col = "gray")
+        return()
+      }
+      
+      # 创建热图
+      if(requireNamespace("corrplot", quietly = TRUE)) {
+        corrplot::corrplot(omega_matrix, 
+                          method = "color",
+                          type = "upper",
+                          order = "hclust",
+                          title = plot_title,
+                          tl.cex = 0.8,
+                          tl.col = "black",
+                          mar = c(0,0,2,0))
+      } else {
+        # 使用基础R绘制热图
+        heatmap(omega_matrix, 
+                main = plot_title,
+                col = heat.colors(20),
+                scale = "none")
+      }
+      
+    }, error = function(e) {
+      plot.new()
+      text(0.5, 0.5, paste("热图生成失败:", e$message), cex = 1.2, col = "red")
+    })
+  })
+  
+  # 组别1网络图
+  output$temp_group1_network <- renderPlot({
+    cat("🖥️ 渲染组别1网络图...\n")
+    
+    # 检查是否有主网络分析结果和温度分析结果
+    if(is.null(values$network_result) || is.null(values$temperature_result) || 
+       !values$temperature_result$success) {
+      plot.new()
+      text(0.5, 0.5, "需要先运行主网络分析和温度分析", cex = 1.2, col = "gray")
+      return()
+    }
+    
+    tryCatch({
+      # 检查是否为多组分析
+      is_multigroup <- !is.null(values$temperature_result$is_multigroup) && values$temperature_result$is_multigroup
+      
+      if(!is_multigroup) {
+        plot.new()
+        text(0.5, 0.5, "仅在多组分析时显示", cex = 1.2, col = "gray")
+        return()
+      }
+      
+      # 获取组别信息
+      models <- values$temperature_result$models
+      if(length(models) > 0) {
+        first_model <- models[[1]]
+        params <- first_model@parameters
+        beta_params <- params[params$matrix == "beta", ]
+        groups <- unique(beta_params$group)
+        group1_name <- if(length(groups) >= 1) groups[1] else "组别1"
+      } else {
+        group1_name <- "组别1"
+      }
+      
+      # 获取分组变量
+      group_var <- values$temperature_result$parameters$group_var
+      if(is.null(group_var)) {
+        plot.new()
+        text(0.5, 0.5, "未找到分组变量", cex = 1.2, col = "orange")
+        return()
+      }
+      
+      # 从主数据集中提取组别1的数据
+      full_data <- values$processed_data
+      group1_data <- full_data[full_data[[group_var]] == group1_name, ]
+      
+      if(nrow(group1_data) == 0) {
+        plot.new()
+        text(0.5, 0.5, paste("组别", group1_name, "无数据"), cex = 1.2, col = "orange")
+        return()
+      }
+      
+      # 提取分析变量
+      analysis_vars <- values$final_variables
+      group1_analysis_data <- group1_data[, analysis_vars, drop = FALSE]
+      
+      # 使用与主网络相同的参数进行分析
+      cat("  为组别", group1_name, "重新运行quickNet分析...\n")
+      
+      # 继承主网络的所有参数
+      network_args <- list(
+        data = group1_analysis_data,
+        threshold = input$threshold %||% 0.05,
+        edge.labels = TRUE,
+        colors = values$network_group_colors,
+        groups = values$variable_groups,
+        layout = "spring"  # 使用独立的layout
+      )
+      
+      # 运行quickNet分析
+      group1_network <- do.call(quickNet::quickNet, network_args)
+      
+      # 直接绘制网络图（quickNet已经处理了可视化）
+      plot(group1_network, main = paste0(group1_name, " 网络图"))
+      
+    }, error = function(e) {
+      cat("组别1网络图错误:", e$message, "\n")
+      plot.new()
+      text(0.5, 0.5, paste("组别1网络图失败:", e$message), cex = 1, col = "red")
+    })
+  })
+  
+  # 组别2网络图
+  output$temp_group2_network <- renderPlot({
+    cat("🖥️ 渲染组别2网络图...\n")
+    
+    # 检查是否有主网络分析结果和温度分析结果
+    if(is.null(values$network_result) || is.null(values$temperature_result) || 
+       !values$temperature_result$success) {
+      plot.new()
+      text(0.5, 0.5, "需要先运行主网络分析和温度分析", cex = 1.2, col = "gray")
+      return()
+    }
+    
+    tryCatch({
+      # 检查是否为多组分析
+      is_multigroup <- !is.null(values$temperature_result$is_multigroup) && values$temperature_result$is_multigroup
+      
+      if(!is_multigroup) {
+        plot.new()
+        text(0.5, 0.5, "仅在多组分析时显示", cex = 1.2, col = "gray")
+        return()
+      }
+      
+      # 获取组别信息
+      models <- values$temperature_result$models
+      if(length(models) > 0) {
+        first_model <- models[[1]]
+        params <- first_model@parameters
+        beta_params <- params[params$matrix == "beta", ]
+        groups <- unique(beta_params$group)
+        group2_name <- if(length(groups) >= 2) groups[2] else "组别2"
+      } else {
+        group2_name <- "组别2"
+      }
+      
+      # 获取分组变量
+      group_var <- values$temperature_result$parameters$group_var
+      if(is.null(group_var)) {
+        plot.new()
+        text(0.5, 0.5, "未找到分组变量", cex = 1.2, col = "orange")
+        return()
+      }
+      
+      # 从主数据集中提取组别2的数据
+      full_data <- values$processed_data
+      group2_data <- full_data[full_data[[group_var]] == group2_name, ]
+      
+      if(nrow(group2_data) == 0) {
+        plot.new()
+        text(0.5, 0.5, paste("组别", group2_name, "无数据"), cex = 1.2, col = "orange")
+        return()
+      }
+      
+      # 提取分析变量
+      analysis_vars <- values$final_variables
+      group2_analysis_data <- group2_data[, analysis_vars, drop = FALSE]
+      
+      # 使用与主网络相同的参数进行分析
+      cat("  为组别", group2_name, "重新运行quickNet分析...\n")
+      
+      # 继承主网络的所有参数
+      network_args <- list(
+        data = group2_analysis_data,
+        threshold = input$threshold %||% 0.05,
+        edge.labels = TRUE,
+        colors = values$network_group_colors,
+        groups = values$variable_groups,
+        layout = "spring"  # 使用独立的layout
+      )
+      
+      # 运行quickNet分析
+      group2_network <- do.call(quickNet::quickNet, network_args)
+      
+      # 直接绘制网络图（quickNet已经处理了可视化）
+      plot(group2_network, main = paste0(group2_name, " 网络图"))
+      
+    }, error = function(e) {
+      cat("组别2网络图错误:", e$message, "\n")
+      plot.new()
+      text(0.5, 0.5, paste("组别2网络图失败:", e$message), cex = 1, col = "red")
+    })
+  })
+  
+  # 修正temp_analysis_summary以匹配实际数据结构
+  output$temp_analysis_summary <- renderUI({
+    req(values$temperature_result)
+    
+    if(!values$temperature_result$success) {
+      return(div(class = "alert alert-danger", "分析失败"))
+    }
+    
+    result <- values$temperature_result
+    params <- result$parameters
+    
+    # 基本信息显示
+    tags$div(
+      tags$p(tags$strong("✅ 分析状态："), "完成"),
+      tags$p(tags$strong("📊 分析类型："), 
+             ifelse(is.null(params$group_var), "单组网络温度分析", "多组网络温度比较")),
+      tags$p(tags$strong("🔧 二值化方法："), params$binary_transform),
+      tags$p(tags$strong("📝 编码格式："), params$binary_encoding),
+      tags$p(tags$strong("📋 模型数量："), length(result$models)),
+      if(!is.null(result$comparison$best_model)) {
+        tags$p(tags$strong("🏆 最佳模型："), result$comparison$best_model)
+      }
+    )
+  })
   
   # 首页"开始分析"按钮观察器
   observeEvent(input$start_analysis, {

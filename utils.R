@@ -2026,3 +2026,536 @@ generate_analysis_code <- function(analysis_params, data_info = NULL, variable_s
   
   return(full_code)
 }
+
+# =============================================================================
+# 网络温度分析模块
+# 参考 network_temperature-main/zTemperature.R 实现
+# =============================================================================
+
+# 主函数：网络温度分析
+network_temperature_analysis <- function(data, 
+                                       group_var = NULL,
+                                       selected_vars,
+                                       binary_transform = "median",
+                                       binary_encoding = "01", 
+                                       binary_threshold = NULL,
+                                       estimator = "ML",
+                                       alpha = 0.05) {
+  
+  cat("🌡️ 开始网络温度分析...\n")
+  
+  tryCatch({
+    
+    # 1. 数据准备
+    cat("📊 步骤1: 数据准备和二值化...\n")
+    binary_data <- prepare_binary_data(data, selected_vars, binary_transform, binary_encoding, binary_threshold, group_var)
+    
+    # 2. 构建Ising模型
+    cat("🔧 步骤2: 构建Ising模型...\n")
+    ising_models <- fit_ising_models(binary_data, group_var, selected_vars, estimator)
+    
+    # 3. 计算网络指标
+    cat("📈 步骤3: 计算网络温度和全局指标...\n")
+    network_metrics <- tryCatch({
+      extract_network_metrics(ising_models)
+    }, error = function(e) {
+      cat("❌ 步骤3失败:", e$message, "\n")
+      stop("步骤3: extract_network_metrics失败 - ", e$message)
+    })
+    cat("✅ 步骤3完成\n")
+    
+    # 4. 模型比较
+    cat("⚖️ 步骤4: 模型比较和选择...\n")
+    model_comparison <- tryCatch({
+      compare_ising_models(ising_models)
+    }, error = function(e) {
+      cat("❌ 步骤4失败:", e$message, "\n")
+      stop("步骤4: compare_ising_models失败 - ", e$message)
+    })
+    cat("✅ 步骤4完成\n")
+    
+    # 5. 生成结果摘要
+    cat("📋 步骤5: 生成分析结果摘要...\n")
+    analysis_summary <- tryCatch({
+      generate_temperature_summary(network_metrics, model_comparison, group_var)
+    }, error = function(e) {
+      cat("❌ 步骤5失败:", e$message, "\n")
+      stop("步骤5: generate_temperature_summary失败 - ", e$message)
+    })
+    cat("✅ 步骤5完成\n")
+    
+    result <- list(
+      success = TRUE,
+      binary_data = binary_data,
+      models = ising_models,
+      metrics = network_metrics,
+      comparison = model_comparison,
+      summary = analysis_summary,
+      parameters = list(
+        group_var = group_var,
+        selected_vars = selected_vars,
+        binary_transform = binary_transform,
+        binary_encoding = binary_encoding,
+        binary_threshold = binary_threshold,
+        estimator = estimator,
+        alpha = alpha
+      )
+    )
+    
+    cat("✅ 网络温度分析完成！\n")
+    return(result)
+    
+  }, error = function(e) {
+    cat("❌ 网络温度分析失败:", e$message, "\n")
+    return(list(
+      success = FALSE,
+      error = e$message,
+      parameters = list(
+        group_var = group_var,
+        selected_vars = selected_vars,
+        binary_transform = binary_transform,
+        binary_encoding = binary_encoding
+      )
+    ))
+  })
+}
+
+# 数据二值化函数（两层设计）
+prepare_binary_data <- function(data, vars, transform = "median", encoding = "01", threshold = NULL, group_var = NULL) {
+  
+  cat("🔄 数据二值化: 方法=", transform, ", 编码=", encoding, "\n")
+  
+  # 确保包含分组变量（如果有）
+  if(!is.null(group_var) && group_var %in% names(data)) {
+    analysis_data <- data[, c(vars, group_var), drop = FALSE]
+    cat("📊 保留分组变量:", group_var, "\n")
+  } else {
+    analysis_data <- data[, vars, drop = FALSE]
+  }
+  
+  # 第一层：转换为0/1
+  for(var in vars) {
+    var_data <- analysis_data[[var]]
+    
+    if(transform == "median") {
+      threshold_val <- median(var_data, na.rm = TRUE)
+      binary_var <- ifelse(var_data > threshold_val, 1, 0)
+    } else if(transform == "mean") {
+      threshold_val <- mean(var_data, na.rm = TRUE)
+      binary_var <- ifelse(var_data > threshold_val, 1, 0)
+    } else if(transform == "custom" && !is.null(threshold)) {
+      binary_var <- ifelse(var_data > threshold, 1, 0)
+    } else if(transform == "normalize") {
+      normalized <- (var_data - min(var_data, na.rm = TRUE)) / (max(var_data, na.rm = TRUE) - min(var_data, na.rm = TRUE))
+      binary_var <- ifelse(normalized > 0.5, 1, 0)
+    } else if(transform == "keep") {
+      # 假设数据已经是0/1
+      binary_var <- var_data
+    } else {
+      # 默认使用中位数
+      threshold_val <- median(var_data, na.rm = TRUE)
+      binary_var <- ifelse(var_data > threshold_val, 1, 0)
+    }
+    
+    analysis_data[[var]] <- binary_var
+  }
+  
+  # 第二层：编码格式转换
+  if(encoding == "neg11") {
+    # 转换0/1为-1/1
+    for(var in vars) {
+      analysis_data[[var]] <- ifelse(analysis_data[[var]] == 0, -1, 1)
+    }
+    cat("📊 编码转换: 0→-1, 1→1\n")
+  } else {
+    cat("📊 保持0/1编码\n")
+  }
+  
+  # 检查数据质量
+  complete_cases <- complete.cases(analysis_data)
+  n_complete <- sum(complete_cases)
+  
+  cat("📋 二值化完成 - 完整观测:", n_complete, "/", nrow(analysis_data), "\n")
+  
+  if(n_complete < 30) {
+    warning("⚠️ 完整观测数量过少，可能影响分析结果")
+  }
+  
+  return(analysis_data[complete_cases, , drop = FALSE])
+}
+
+# Ising模型拟合函数
+fit_ising_models <- function(data, group_var = NULL, selected_vars, estimator = "ML") {
+  
+  if(!requireNamespace("psychonetrics", quietly = TRUE)) {
+    stop("需要安装psychonetrics包：install.packages('psychonetrics')")
+  }
+  
+  models <- list()
+  
+  if(is.null(group_var)) {
+    # 单组分析 - 简化版本，只构建基础模型和稀疏版本
+    cat("🔧 拟合单组Ising模型...\n")
+    
+    # 详细调试信息
+    cat("  调试信息:\n")
+    cat("    数据维度:", dim(data), "\n")
+    cat("    选择变量:", paste(selected_vars, collapse = ", "), "\n")
+    cat("    变量长度:", length(selected_vars), "\n")
+    cat("    estimator:", estimator, "\n")
+    
+    # 检查数据和变量
+    if(length(selected_vars) == 0) {
+      stop("选择变量为空")
+    }
+    
+    if(any(is.na(selected_vars)) || any(selected_vars == "")) {
+      stop("选择变量包含NA或空值")
+    }
+    
+    if(!all(selected_vars %in% names(data))) {
+      missing_vars <- selected_vars[!selected_vars %in% names(data)]
+      stop("数据中缺少变量: ", paste(missing_vars, collapse = ", "))
+    }
+    
+    # 基础模型 - 使用简单的调用方式（参考测试脚本成功的方法）
+    base_model <- tryCatch({
+      psychonetrics::Ising(
+        data = data,
+        vars = selected_vars,
+        estimator = estimator
+      )
+    }, error = function(e) {
+      cat("  Ising模型构建失败:", e$message, "\n")
+      stop("Ising模型构建失败: ", e$message)
+    })
+    
+    tryCatch({
+      # Dense模型（完整模型）
+      cat("  构建Dense模型...\n")
+      models$Dense <- base_model %>% psychonetrics::runmodel()
+      
+      # Sparse模型（修剪非显著边）
+      cat("  构建Sparse模型...\n")
+      models$Sparse <- base_model %>% 
+        psychonetrics::prune(alpha=0.05) %>% 
+        psychonetrics::stepup(alpha=0.05) %>% 
+        psychonetrics::runmodel()
+      
+      cat("✅ 单组模型拟合完成 (2个模型)\n")
+      
+    }, error = function(e) {
+      cat("  警告: 稀疏模型拟合失败，仅使用Dense模型:", e$message, "\n")
+      models$Dense <- base_model %>% psychonetrics::runmodel()
+      cat("✅ 单组模型拟合完成 (1个模型)\n")
+    })
+    
+  } else {
+    # 多组分析 - 实现完整的8模型（4约束层级 × 2密度策略）
+    cat("🔧 拟合多组Ising模型 (分组变量:", group_var, ")...\n")
+    
+    # 基础多组模型
+    base_model <- psychonetrics::Ising(
+      data = data,
+      vars = selected_vars,
+      groups = group_var,
+      estimator = estimator
+    )
+    
+    # 定义拟合函数（Dense + Sparse）
+    fit_dense_sparse <- function(model, label) {
+      cat("  构建", label, "模型组...\n")
+      tryCatch({
+        dense <- model %>% psychonetrics::runmodel()
+        sparse <- model %>% psychonetrics::prune(alpha=0.05) %>% 
+                 psychonetrics::stepup(alpha=0.05) %>% psychonetrics::runmodel()
+        list(dense = dense, sparse = sparse)
+      }, error = function(e) {
+        cat("    警告:", label, "稀疏模型失败，仅使用Dense模型:", e$message, "\n")
+        dense <- model %>% psychonetrics::runmodel()
+        list(dense = dense, sparse = NULL)
+      })
+    }
+    
+    # 4种约束层级（参考calculate_temperature.R）
+    cat("  第1层级: 所有参数自由 (Free)...\n")
+    free_models <- fit_dense_sparse(base_model, "Free")
+    models$M1_Free_Dense <- free_models$dense
+    if(!is.null(free_models$sparse)) models$M2_Free_Sparse <- free_models$sparse
+    
+    cat("  第2层级: 网络结构相等 (Omega Equal)...\n")
+    omega_models <- fit_dense_sparse(
+      base_model %>% psychonetrics::groupequal("omega"), "OmegaEqual"
+    )
+    models$M3_Omega_Dense <- omega_models$dense
+    if(!is.null(omega_models$sparse)) models$M4_Omega_Sparse <- omega_models$sparse
+    
+    cat("  第3层级: 网络结构+阈值相等 (Omega+Tau Equal)...\n")
+    omega_tau_models <- fit_dense_sparse(
+      base_model %>% psychonetrics::groupequal("omega") %>% psychonetrics::groupequal("tau"), 
+      "OmegaTauEqual"
+    )
+    models$M5_OmegaTau_Dense <- omega_tau_models$dense
+    if(!is.null(omega_tau_models$sparse)) models$M6_OmegaTau_Sparse <- omega_tau_models$sparse
+    
+    cat("  第4层级: 所有参数相等 (Omega+Tau+Beta Equal)...\n")
+    omega_tau_beta_models <- fit_dense_sparse(
+      base_model %>% psychonetrics::groupequal("omega") %>% 
+      psychonetrics::groupequal("tau") %>% psychonetrics::groupequal("beta"), 
+      "OmegaTauBetaEqual"
+    )
+    models$M7_OmegaTauBeta_Dense <- omega_tau_beta_models$dense
+    if(!is.null(omega_tau_beta_models$sparse)) models$M8_OmegaTauBeta_Sparse <- omega_tau_beta_models$sparse
+    
+    actual_model_count <- length(models)
+    cat("✅ 多组模型拟合完成 (", actual_model_count, "个模型)\n")
+  }
+  
+  return(models)
+}
+
+# 网络指标提取函数
+extract_network_metrics <- function(models) {
+  
+  metrics <- list()
+  
+  for(model_name in names(models)) {
+    model <- models[[model_name]]
+    
+    tryCatch({
+      # 提取参数
+      params <- psychonetrics::parameters(model)
+      
+      # 计算温度 T = 1/β (参考zTemperature.R第84行)
+      cat("🔍 调试模型", model_name, "的温度计算...\n")
+      cat("  parameters表列名:", paste(names(params), collapse = ", "), "\n")
+      cat("  parameters表前5行:\n")
+      print(head(params, 5))
+      
+      # 检查各种可能的列名和方法
+      beta_params <- c()
+      
+      if("matrix" %in% names(params)) {
+        # 方法1: 使用matrix列 (参考calculate_temperature.R第178行)
+        beta_params <- params[params$matrix == "beta", "est"]
+        cat("  使用params$matrix找到beta参数数量:", length(beta_params), "\n")
+      }
+      
+      if(length(beta_params) == 0 && "param" %in% names(params)) {
+        # 方法2: 使用param列
+        beta_params <- params[params$param == "beta", "est"]
+        cat("  使用params$param找到beta参数数量:", length(beta_params), "\n")
+      }
+      
+      if(length(beta_params) == 0 && "par" %in% names(params)) {
+        # 方法3: 使用par列
+        beta_params <- params[params$par == "beta", "est"]
+        cat("  使用params$par找到beta参数数量:", length(beta_params), "\n")
+      }
+      
+      if(length(beta_params) == 0) {
+        cat("  所有方法都未找到beta参数\n")
+      }
+      
+      if(length(beta_params) > 0) {
+        # 处理beta参数可能是list的情况
+        if(is.list(beta_params)) {
+          cat("  beta参数是list，尝试转换为数值\n")
+          beta_values <- tryCatch({
+            as.numeric(unlist(beta_params))
+          }, error = function(e) {
+            cat("    转换失败:", e$message, "\n")
+            return(NA)
+          })
+        } else {
+          beta_values <- as.numeric(beta_params)
+        }
+        
+        cat("  转换后的beta值:", beta_values, "\n")
+        
+        if(length(beta_values) > 0 && !all(is.na(beta_values))) {
+          beta_mean <- mean(beta_values, na.rm = TRUE)
+          if(!is.na(beta_mean) && beta_mean != 0) {
+            temperature <- 1 / beta_mean
+            cat("  计算温度成功: 1/", beta_mean, "=", temperature, "\n")
+          } else {
+            temperature <- NA
+            cat("  beta均值无效或为0，设置温度为NA\n")
+          }
+        } else {
+          temperature <- NA
+          cat("  所有beta值均为NA，设置温度为NA\n")
+        }
+      } else {
+        temperature <- NA
+        cat("  未找到beta参数，设置温度为NA\n")
+      }
+      
+      # 计算连接度
+      omega_matrix <- psychonetrics::getmatrix(model, "omega")
+      if(is.list(omega_matrix)) {
+        # 多组情况，取第一组
+        omega_matrix <- omega_matrix[[1]]
+      }
+      connectivity <- sum(abs(omega_matrix[upper.tri(omega_matrix)]))
+      
+      # 计算密度
+      n_nodes <- nrow(omega_matrix)
+      max_edges <- n_nodes * (n_nodes - 1) / 2
+      density <- sum(omega_matrix[upper.tri(omega_matrix)] != 0) / max_edges
+      
+      # 拟合指标
+      fit_info <- psychonetrics::fit(model)
+      
+      metrics[[model_name]] <- list(
+        temperature = temperature,
+        connectivity = connectivity,
+        density = density,
+        AIC = fit_info$AIC,
+        BIC = fit_info$BIC,
+        CFI = fit_info$CFI %||% NA,
+        RMSEA = fit_info$RMSEA %||% NA
+      )
+      
+    }, error = function(e) {
+      cat("⚠️ 提取模型", model_name, "指标时出错:", e$message, "\n")
+      metrics[[model_name]] <- list(
+        temperature = NA,
+        connectivity = NA,
+        density = NA,
+        AIC = NA,
+        BIC = NA,
+        CFI = NA,
+        RMSEA = NA
+      )
+    })
+  }
+  
+  return(metrics)
+}
+
+# 模型比较函数
+compare_ising_models <- function(models) {
+  
+  if(length(models) <= 1) {
+    return(list(best_model = names(models)[1], comparison_table = NULL))
+  }
+  
+  tryCatch({
+    # 使用psychonetrics的compare函数 - 需要传递named arguments而不是list
+    cat("  调用psychonetrics::compare，模型数量:", length(models), "\n")
+    cat("  模型名称:", paste(names(models), collapse = ", "), "\n")
+    
+    # 使用do.call将list转换为named arguments
+    comparison_result <- do.call(psychonetrics::compare, models)
+    
+    cat("  compare调用成功，结果类型:", class(comparison_result), "\n")
+    cat("  结果结构:", paste(names(comparison_result), collapse = ", "), "\n")
+    
+    # 提取比较表 - psychonetrics::compare直接返回比较表
+    comparison_table <- comparison_result
+    
+    # 找到BIC最低的模型
+    best_model_idx <- which.min(comparison_table$BIC)
+    best_model <- rownames(comparison_table)[best_model_idx]
+    
+    cat("🏆 最佳模型 (基于BIC):", best_model, "\n")
+    
+    return(list(
+      best_model = best_model,
+      comparison_table = comparison_table,
+      comparison_result = comparison_result
+    ))
+    
+  }, error = function(e) {
+    cat("⚠️ 模型比较失败:", e$message, "\n")
+    cat("  错误详细信息:", toString(e), "\n")
+    
+    # 手动计算AIC/BIC比较
+    cat("  使用手动方法计算模型比较...\n")
+    aic_values <- tryCatch({
+      sapply(models, function(m) psychonetrics::fit(m)$AIC)
+    }, error = function(e2) {
+      cat("    AIC计算失败:", e2$message, "\n")
+      rep(NA, length(models))
+    })
+    
+    bic_values <- tryCatch({
+      sapply(models, function(m) psychonetrics::fit(m)$BIC)
+    }, error = function(e2) {
+      cat("    BIC计算失败:", e2$message, "\n")
+      rep(NA, length(models))
+    })
+    
+    best_model <- names(which.min(bic_values))
+    
+    comparison_table <- data.frame(
+      Model = names(models),
+      AIC = aic_values,
+      BIC = bic_values,
+      stringsAsFactors = FALSE
+    )
+    
+    return(list(
+      best_model = best_model,
+      comparison_table = comparison_table,
+      comparison_result = NULL
+    ))
+  })
+}
+
+# 生成分析摘要
+generate_temperature_summary <- function(metrics, comparison, group_var) {
+  
+  summary_lines <- c()
+  
+  summary_lines <- c(summary_lines, 
+    "<h3>🌡️ 网络温度分析结果摘要</h3>",
+    paste0("<p><strong>分析类型：</strong>", 
+           ifelse(is.null(group_var), "单组网络分析", paste0("多组网络分析 (分组变量: ", group_var, ")"))),
+    paste0("<strong>分析模型数量：</strong>", length(metrics), "</p>")
+  )
+  
+  if(!is.null(comparison$best_model)) {
+    summary_lines <- c(summary_lines,
+      paste0("<p><strong>🏆 最佳模型：</strong>", comparison$best_model, " (基于BIC准则)</p>")
+    )
+    
+    # 最佳模型的关键指标
+    best_metrics <- metrics[[comparison$best_model]]
+    if(!is.null(best_metrics)) {
+      summary_lines <- c(summary_lines,
+        "<h4>🔍 最佳模型关键指标：</h4>",
+        "<ul>",
+        paste0("<li><strong>网络温度：</strong>", ifelse(is.na(best_metrics$temperature), "无法计算", round(best_metrics$temperature, 3))),
+        paste0("<li><strong>连接强度：</strong>", ifelse(is.na(best_metrics$connectivity), "无法计算", round(best_metrics$connectivity, 3))),
+        paste0("<li><strong>网络密度：</strong>", ifelse(is.na(best_metrics$density), "无法计算", round(best_metrics$density, 3))),
+        paste0("<li><strong>BIC：</strong>", ifelse(is.na(best_metrics$BIC), "无法计算", round(best_metrics$BIC, 2))),
+        "</ul>"
+      )
+    }
+  }
+  
+  # 模型比较表
+  if(!is.null(comparison$comparison_table)) {
+    summary_lines <- c(summary_lines,
+      "<h4>📊 模型比较表：</h4>",
+      "<p>以下为所有拟合模型的比较结果（按BIC排序）：</p>"
+    )
+  }
+  
+  summary_lines <- c(summary_lines,
+    "<h4>💡 结果解释：</h4>",
+    "<ul>",
+    "<li><strong>网络温度：</strong>反映网络稳定性，温度越高表示网络越不稳定</li>",
+    "<li><strong>连接强度：</strong>网络中所有边权重的绝对值之和</li>",
+    "<li><strong>网络密度：</strong>实际连接数与可能最大连接数的比值</li>",
+    "<li><strong>BIC准则：</strong>模型选择指标，值越小表示模型越优</li>",
+    "</ul>"
+  )
+  
+  return(paste(summary_lines, collapse = "\n"))
+}
+
+# 辅助函数：处理NULL值
+`%||%` <- function(x, y) if(is.null(x)) y else x
