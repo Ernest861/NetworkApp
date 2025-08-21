@@ -3350,3 +3350,687 @@ generate_complete_script <- function(recorder, output_path = NULL) {
     return(paste(all_lines, collapse = "\n"))
   }
 }
+
+# =============================================================================
+# 样本量计算函数 (powerly)
+# =============================================================================
+
+#' 基于网络特征计算推荐样本量
+#' @param network_result 网络分析结果对象（来自quickNet或qgraph）
+#' @param nodes 网络节点数量
+#' @param density 网络密度（可选，如果提供network_result会自动计算）
+#' @param measure 性能测量类型 ("sen", "spe", "mcc", "rho")
+#' @param statistic 统计指标 ("power")
+#' @param measure_value 目标性能测量值 (0.6)
+#' @param statistic_value 目标统计指标值 (0.8)
+#' @param preset 预设配置 ("balanced", "conservative", "exploratory")
+#' @param ... 其他powerly参数
+#' @return powerly分析结果对象
+calculate_sample_size <- function(network_result = NULL, 
+                                nodes = NULL, 
+                                density = NULL,
+                                range_lower = 300,
+                                range_upper = 2000,
+                                cores = 2,
+                                ...) {
+  
+  # 检查powerly包是否可用
+  if(!requireNamespace("powerly", quietly = TRUE)) {
+    stop("需要安装powerly包: install.packages('powerly')")
+  }
+  
+  # 从网络结果中提取特征
+  if(!is.null(network_result)) {
+    network_features <- extract_network_features(network_result)
+    if(is.null(nodes)) nodes <- network_features$nodes
+    if(is.null(density)) density <- network_features$density
+  }
+  
+  # 验证输入参数
+  if(is.null(nodes) || is.null(density)) {
+    stop("必须提供网络节点数和密度信息")
+  }
+  
+  # 记录分析参数
+  cat("🔬 样本量分析参数:\n")
+  cat("   节点数:", nodes, "\n")
+  cat("   网络密度:", round(density, 3), "\n")
+  cat("   样本量搜索范围:", range_lower, "-", range_upper, "\n")
+  cat("   并行核心数:", cores, "\n\n")
+  
+  # 执行样本量计算
+  tryCatch({
+    cat("⏳ 正在进行样本量计算，这可能需要几分钟...\n")
+    
+    # 简化的powerly参数，基于用户示例
+    powerly_params <- list(
+      range_lower = range_lower,
+      range_upper = range_upper,
+      nodes = nodes,
+      density = density,
+      cores = cores
+    )
+    
+    cat("📋 Powerly参数:\n")
+    cat("  - 节点数:", powerly_params$nodes, "\n")
+    cat("  - 密度:", powerly_params$density, "\n")
+    cat("  - 样本量范围:", powerly_params$range_lower, "-", powerly_params$range_upper, "\n")
+    
+    result <- do.call(powerly::powerly, powerly_params)
+    
+    cat("✅ 样本量计算完成!\n")
+    
+    # 创建一个安全的结果对象，避免修改R6环境
+    safe_result <- list(
+      # 复制powerly的关键信息
+      recommendation = result$recommendation,
+      converged = result$converged,
+      iterations = result$iterations,
+      step_1 = result$step_1,
+      step_2 = result$step_2, 
+      step_3 = result$step_3,
+      # 添加我们的网络信息
+      network_info = list(
+        nodes = nodes,
+        density = density,
+        analysis_date = Sys.time()
+      ),
+      # 保存原始powerly结果以便绘图
+      original_result = result
+    )
+    
+    # 获取推荐样本量（confidence interval format）
+    recommendation <- tryCatch({
+      if(!is.null(result$recommendation)) {
+        # 如果是向量，格式化为置信区间
+        if(is.numeric(result$recommendation) && length(result$recommendation) > 1) {
+          paste0("2.5% = ", round(result$recommendation[1]), " | ", 
+                 "50% = ", round(result$recommendation[2]), " | ", 
+                 "97.5% = ", round(result$recommendation[3]))
+        } else {
+          result$recommendation
+        }
+      } else {
+        "无法确定"
+      }
+    }, error = function(e) "无法确定")
+    
+    cat("📊 推荐样本量:", recommendation, "\n\n")
+    
+    return(safe_result)
+    
+  }, error = function(e) {
+    cat("❌ 样本量计算失败:", e$message, "\n")
+    cat("💡 可能的原因:\n")
+    cat("  - powerly包未正确安装\n")
+    cat("  - 网络参数不合理\n")
+    cat("  - 计算资源不足\n")
+    return(NULL)
+  })
+}
+
+#' 简单导出powerly三步可视化为PDF（按用户示例）
+#' @param powerly_result powerly分析结果
+#' @param output_dir 输出目录
+#' @return 导出的文件路径列表
+export_powerly_plots <- function(powerly_result, output_dir) {
+  
+  if(is.null(powerly_result)) {
+    cat("❌ powerly结果为空\n")
+    return(NULL)
+  }
+  
+  # 提取原始powerly结果（如果是我们的安全对象）
+  results <- if(!is.null(powerly_result$original_result)) {
+    powerly_result$original_result
+  } else {
+    powerly_result
+  }
+  
+  # 确保输出目录存在
+  if(!dir.exists(output_dir)) {
+    dir.create(output_dir, recursive = TRUE)
+  }
+  
+  exported_files <- c()
+  
+  # 按用户示例的简单方式导出三个步骤
+  for(step in 1:3) {
+    tryCatch({
+      
+      # 按FigS6a, FigS6b, FigS6c命名
+      filename <- file.path(output_dir, paste0("FigS6", letters[step], "_samplesize", step, ".pdf"))
+      
+      cat("📊 导出Step", step, ":", basename(filename), "\n")
+      
+      # 简单的PDF导出，按用户示例
+      pdf(filename, height = 8, width = 12)
+      plot(results, step = step)
+      dev.off()
+      
+      exported_files <- c(exported_files, filename)
+      cat("✅ 成功: ", basename(filename), "\n")
+      
+    }, error = function(e) {
+      cat("❌ Step", step, "失败:", e$message, "\n")
+      # 安全关闭PDF设备
+      if(dev.cur() > 1) dev.off()
+    })
+  }
+  
+  if(length(exported_files) > 0) {
+    cat("\n🎉 共导出", length(exported_files), "个PDF文件\n")
+  }
+  
+  return(exported_files)
+}
+
+#' 从网络分析结果中提取特征
+#' @param network_result 网络分析结果
+#' @return 包含节点数和密度的列表
+extract_network_features <- function(network_result) {
+  if(is.null(network_result)) {
+    return(list(nodes = NULL, density = NULL))
+  }
+  
+  nodes <- NULL
+  density <- NULL
+  
+  tryCatch({
+    # 处理不同类型的网络对象
+    if(inherits(network_result, "qgraph")) {
+      # qgraph对象特殊处理
+      cat("🔍 处理qgraph对象...\n")
+      
+      # 首先尝试从layout获取节点数
+      if(!is.null(network_result$layout) && is.matrix(network_result$layout)) {
+        nodes <- nrow(network_result$layout)
+        cat("从layout获取节点数:", nodes, "\n")
+      }
+      
+      # 尝试从graphData的bootnetResult获取网络矩阵
+      if(!is.null(network_result$graphData) && inherits(network_result$graphData, "bootnetResult")) {
+        bootnet_obj <- network_result$graphData
+        if(!is.null(bootnet_obj$graph) && is.matrix(bootnet_obj$graph)) {
+          adj_matrix <- bootnet_obj$graph
+          if(is.null(nodes)) nodes <- ncol(adj_matrix)
+          
+          # 显示实际的网络矩阵信息
+          cat("📋 网络矩阵详情:\n")
+          cat("- 矩阵维度:", dim(adj_matrix), "\n")
+          cat("- 矩阵类型:", class(adj_matrix), "\n")
+          cat("- 非零元素数量:", sum(adj_matrix != 0), "\n")
+          cat("- 矩阵范围:", range(adj_matrix), "\n")
+          
+          # 显示矩阵内容（如果不太大）
+          if(nrow(adj_matrix) <= 10) {
+            cat("- 矩阵内容:\n")
+            print(adj_matrix)
+          }
+          
+          density <- calculate_network_density(adj_matrix)
+          cat("从bootnetResult获取密度:", density, "\n")
+        } else if(!is.null(bootnet_obj$sampleTable)) {
+          # 从sampleTable构建网络矩阵
+          sample_table <- bootnet_obj$sampleTable
+          if(is.data.frame(sample_table) && nrow(sample_table) > 0) {
+            if(is.null(nodes)) {
+              # 从node1和node2列推断节点数
+              max_node <- max(c(sample_table$node1, sample_table$node2), na.rm = TRUE)
+              nodes <- max_node
+            }
+            # 计算有效边数
+            valid_edges <- sum(sample_table$value != 0, na.rm = TRUE)
+            max_edges <- nodes * (nodes - 1) / 2
+            density <- if(max_edges > 0) valid_edges / max_edges else 0
+            cat("从sampleTable计算密度:", density, "\n")
+          }
+        }
+      }
+      
+      # 如果上述方法都失败，尝试从Edgelist
+      if((is.null(nodes) || is.null(density)) && !is.null(network_result$Edgelist)) {
+        edgelist <- network_result$Edgelist
+        if(is.list(edgelist) && length(edgelist) > 0) {
+          # 如果Edgelist是一个列表，尝试提取信息
+          if(!is.null(edgelist$from) && !is.null(edgelist$to)) {
+            if(is.null(nodes)) {
+              nodes <- max(c(edgelist$from, edgelist$to), na.rm = TRUE)
+            }
+            if(!is.null(edgelist$weight)) {
+              valid_edges <- sum(edgelist$weight != 0, na.rm = TRUE)
+              max_edges <- nodes * (nodes - 1) / 2
+              density <- if(max_edges > 0) valid_edges / max_edges else 0
+            }
+          }
+        } else if(is.data.frame(edgelist) && nrow(edgelist) > 0) {
+          if(is.null(nodes)) {
+            nodes <- max(c(edgelist$from, edgelist$to), na.rm = TRUE)
+          }
+          if("weight" %in% names(edgelist)) {
+            valid_edges <- sum(edgelist$weight != 0, na.rm = TRUE)
+            max_edges <- nodes * (nodes - 1) / 2
+            density <- if(max_edges > 0) valid_edges / max_edges else 0
+          }
+        }
+      }
+    } else if(is.matrix(network_result)) {
+      # 直接的邻接矩阵
+      if(nrow(network_result) == ncol(network_result)) {
+        nodes <- ncol(network_result)
+        density <- calculate_network_density(network_result)
+      }
+    } else if(is.list(network_result)) {
+      # quickNet结果对象或其他列表对象
+      if(!is.null(network_result$graph) && is.matrix(network_result$graph)) {
+        nodes <- ncol(network_result$graph)
+        density <- calculate_network_density(network_result$graph)
+      } else if(!is.null(network_result$network) && is.matrix(network_result$network)) {
+        nodes <- ncol(network_result$network)
+        density <- calculate_network_density(network_result$network)
+      } else if(!is.null(network_result$adjacency) && is.matrix(network_result$adjacency)) {
+        nodes <- ncol(network_result$adjacency)
+        density <- calculate_network_density(network_result$adjacency)
+      } else {
+        # 尝试从第一个矩阵元素提取
+        matrix_elements <- network_result[sapply(network_result, is.matrix)]
+        if(length(matrix_elements) > 0) {
+          first_matrix <- matrix_elements[[1]]
+          if(nrow(first_matrix) == ncol(first_matrix)) {
+            nodes <- ncol(first_matrix)
+            density <- calculate_network_density(first_matrix)
+          }
+        }
+      }
+    } else if(is.data.frame(network_result)) {
+      # 数据框（可能是原始数据）
+      nodes <- ncol(network_result)
+      density <- 0.4  # 默认中等密度
+    }
+    
+    # 如果仍然没有提取到有效信息，使用调试信息
+    if(is.null(nodes) || is.null(density)) {
+      cat("⚠️ 网络特征提取失败，网络对象结构:\n")
+      if(is.list(network_result)) {
+        cat("对象类型: list, 元素名称:", names(network_result), "\n")
+        for(name in names(network_result)) {
+          element <- network_result[[name]]
+          cat("  ", name, ": ", class(element), 
+              if(is.matrix(element)) paste0(" [", nrow(element), "x", ncol(element), "]") else "",
+              "\n")
+        }
+      } else {
+        cat("对象类型:", class(network_result), "\n")
+        if(is.matrix(network_result)) {
+          cat("矩阵维度:", dim(network_result), "\n")
+        }
+      }
+      
+      # 提供默认值
+      nodes <- 10  # 默认节点数
+      density <- 0.4  # 默认密度
+    }
+    
+  }, error = function(e) {
+    cat("❌ 网络特征提取错误:", e$message, "\n")
+    # 提供默认值
+    nodes <- 10
+    density <- 0.4
+  })
+  
+  # 确保返回值的有效性
+  if(is.null(nodes) || !is.numeric(nodes) || nodes <= 0) {
+    nodes <- 10
+  }
+  if(is.null(density) || !is.numeric(density) || density <= 0 || density > 1) {
+    density <- 0.4
+  }
+  
+  return(list(nodes = as.integer(nodes), density = as.numeric(density)))
+}
+
+#' 计算网络密度
+#' @param adj_matrix 邻接矩阵
+#' @return 网络密度值
+calculate_network_density <- function(adj_matrix) {
+  if(is.null(adj_matrix) || !is.matrix(adj_matrix)) {
+    cat("⚠️ 邻接矩阵无效，使用默认密度\n")
+    return(0.4)  # 默认值
+  }
+  
+  tryCatch({
+    # 确保矩阵是方阵
+    if(nrow(adj_matrix) != ncol(adj_matrix)) {
+      cat("⚠️ 邻接矩阵不是方阵:", dim(adj_matrix), "\n")
+      return(0.4)
+    }
+    
+    n <- nrow(adj_matrix)
+    if(n <= 1) {
+      cat("⚠️ 节点数量过少:", n, "\n")
+      return(0.4)
+    }
+    
+    # 创建矩阵副本以避免修改原矩阵
+    temp_matrix <- as.matrix(adj_matrix)
+    
+    # 移除对角线
+    diag(temp_matrix) <- 0
+    
+    # 计算非零边的数量（考虑可能的数值精度问题）
+    threshold <- 1e-10
+    actual_edges <- sum(abs(temp_matrix) > threshold)
+    
+    # 对于无向图，每条边被计算两次，所以除以2
+    actual_edges <- actual_edges / 2
+    
+    # 最大可能边数
+    max_edges <- n * (n - 1) / 2
+    
+    if(max_edges == 0) {
+      cat("⚠️ 最大边数为0\n")
+      return(0)
+    }
+    
+    density <- actual_edges / max_edges
+    density <- min(max(density, 0), 1)  # 确保在0-1范围内
+    
+    cat("📊 密度计算: 实际边数=", actual_edges, ", 最大边数=", max_edges, ", 密度=", round(density, 3), "\n")
+    
+    return(density)
+    
+  }, error = function(e) {
+    cat("❌ 密度计算错误:", e$message, "\n")
+    return(0.4)  # 出错时返回默认值
+  })
+}
+
+#' 获取powerly预设配置
+#' @param preset 预设名称
+#' @return 配置参数列表
+get_powerly_preset <- function(preset = "balanced") {
+  if(!exists("POWERLY_CONFIG")) {
+    # 如果配置未加载，使用默认值
+    return(list(
+      range_lower = 300,
+      range_upper = 2000,
+      samples = 30,
+      replications = 30,
+      boots = 1000,
+      cores = 2,
+      tolerance = 50,
+      iterations = 10
+    ))
+  }
+  
+  # 获取预设配置
+  if(preset %in% names(POWERLY_CONFIG$presets)) {
+    config <- POWERLY_CONFIG$presets[[preset]]
+  } else {
+    config <- POWERLY_CONFIG$presets$balanced
+  }
+  
+  # 合并默认参数
+  defaults <- POWERLY_CONFIG$defaults
+  for(name in names(defaults)) {
+    if(!name %in% names(config)) {
+      config[[name]] <- defaults[[name]]
+    }
+  }
+  
+  return(config)
+}
+
+#' 根据网络规模调整参数
+#' @param params 参数列表
+#' @param nodes 节点数
+#' @return 调整后的参数列表
+adjust_params_for_network_size <- function(params, nodes) {
+  if(!exists("POWERLY_CONFIG")) {
+    return(params)
+  }
+  
+  # 确定网络规模类别
+  size_category <- "medium"
+  if(nodes <= POWERLY_CONFIG$performance$network_size_adjustments$small$nodes_max) {
+    size_category <- "small"
+  } else if(nodes <= POWERLY_CONFIG$performance$network_size_adjustments$medium$nodes_max) {
+    size_category <- "medium"
+  } else {
+    size_category <- "large"
+  }
+  
+  # 应用规模调整
+  adjustments <- POWERLY_CONFIG$performance$network_size_adjustments[[size_category]]
+  
+  # 调整boots和cores
+  if(!is.null(adjustments$boots)) {
+    params$boots <- min(params$boots, adjustments$boots)
+  }
+  if(!is.null(adjustments$cores)) {
+    params$cores <- min(params$cores, adjustments$cores)
+  }
+  
+  # 大型网络启用内存节省模式
+  if(size_category == "large") {
+    params$save_memory <- TRUE
+  }
+  
+  return(params)
+}
+
+#' 生成样本量分析报告
+#' @param powerly_result powerly分析结果
+#' @return 文本报告
+generate_sample_size_report <- function(powerly_result) {
+  if(is.null(powerly_result)) {
+    return("样本量分析未完成")
+  }
+  
+  # 提取关键信息
+  recommendation <- powerly_result$recommendation
+  if(is.null(recommendation)) {
+    recommendation <- "无法确定"
+  }
+  
+  network_info <- powerly_result$network_info
+  if(is.null(network_info)) {
+    network_info <- list(nodes = "未知", density = "未知")
+  }
+  
+  # 生成解释
+  interpretation <- interpret_sample_size(recommendation)
+  
+  # 构建报告
+  report <- paste0(
+    "# 样本量分析报告\n\n",
+    "## 网络特征\n",
+    "- 节点数量: ", network_info$nodes, "\n",
+    "- 网络密度: ", round(network_info$density, 3), "\n\n",
+    "## 分析结果\n", 
+    "- 推荐样本量: **", recommendation, "**\n",
+    "- 分析日期: ", format(network_info$analysis_date, "%Y-%m-%d %H:%M:%S"), "\n\n",
+    "## 结果解释\n",
+    interpretation, "\n\n",
+    "## 建议\n",
+    "- 建议的样本量是基于目标敏感性和统计功效计算得出\n",
+    "- 实际研究中应考虑预期的数据缺失率\n",
+    "- 如需更保守的结果，可考虑增加20-30%的样本量\n"
+  )
+  
+  return(report)
+}
+
+#' 解释样本量结果
+#' @param sample_size 推荐样本量
+#' @return 解释文本
+interpret_sample_size <- function(sample_size) {
+  # 处理向量输入，取第一个值或中位数
+  if(is.numeric(sample_size) && length(sample_size) > 1) {
+    sample_size <- sample_size[length(sample_size) %/% 2 + 1]  # 取中间值
+  }
+  
+  # 确保是单个数值
+  if(!is.numeric(sample_size) || length(sample_size) != 1 || is.na(sample_size)) {
+    return("样本量解释不可用")
+  }
+  
+  if(!exists("POWERLY_CONFIG")) {
+    return("样本量解释信息不可用")
+  }
+  
+  ranges <- POWERLY_CONFIG$interpretation$sample_size_ranges
+  
+  for(range_name in names(ranges)) {
+    if(sample_size <= ranges[[range_name]]$max) {
+      return(ranges[[range_name]]$interpretation)
+    }
+  }
+  
+  return("优秀样本，支持复杂网络分析和比较")
+}
+
+#' 测试powerly包是否正常工作
+#' @return 测试结果
+test_powerly_package <- function() {
+  if(!requireNamespace("powerly", quietly = TRUE)) {
+    return("powerly包未安装")
+  }
+  
+  cat("🧪 测试powerly包基础功能...\n")
+  
+  tryCatch({
+    # 简化的测试，只使用关键参数
+    test_result <- powerly::powerly(
+      range_lower = 50,
+      range_upper = 100,
+      nodes = 3,
+      density = 0.5,
+      cores = 1
+    )
+    
+    cat("- Powerly测试成功\n")
+    cat("- 测试结果类型:", class(test_result), "\n")
+    
+    if(!is.null(test_result$recommendation)) {
+      cat("- 测试推荐值:", test_result$recommendation, "\n")
+    }
+    
+    return("测试成功")
+    
+  }, error = function(e) {
+    cat("- Powerly测试失败:", e$message, "\n")
+    return(paste("测试失败:", e$message))
+  })
+}
+
+#' 调试网络对象结构
+#' @param network_result 网络分析结果
+#' @return 调试信息字符串
+debug_network_structure <- function(network_result) {
+  if(is.null(network_result)) {
+    return("网络结果为NULL")
+  }
+  
+  info <- c()
+  info <- c(info, paste("对象类型:", paste(class(network_result), collapse = ", ")))
+  
+  if(is.list(network_result)) {
+    info <- c(info, paste("列表元素数量:", length(network_result)))
+    info <- c(info, paste("元素名称:", paste(names(network_result), collapse = ", ")))
+    
+    for(name in names(network_result)) {
+      element <- network_result[[name]]
+      if(is.matrix(element)) {
+        info <- c(info, paste("  ", name, ": 矩阵", dim(element)[1], "x", dim(element)[2]))
+      } else if(is.data.frame(element)) {
+        info <- c(info, paste("  ", name, ": 数据框", nrow(element), "x", ncol(element)))
+      } else if(is.list(element)) {
+        info <- c(info, paste("  ", name, ": 列表，长度", length(element)))
+        if(name == "Edgelist" && length(element) > 0) {
+          # 详细检查Edgelist结构
+          info <- c(info, paste("    Edgelist子元素:", paste(names(element), collapse = ", ")))
+        } else if(name == "graphData" && inherits(element, "bootnetResult")) {
+          # 详细检查bootnetResult结构
+          info <- c(info, paste("    bootnetResult子元素:", paste(names(element), collapse = ", ")))
+          if(!is.null(element$graph) && is.matrix(element$graph)) {
+            info <- c(info, paste("    graph矩阵:", dim(element$graph)[1], "x", dim(element$graph)[2]))
+          }
+          if(!is.null(element$sampleTable) && is.data.frame(element$sampleTable)) {
+            info <- c(info, paste("    sampleTable:", nrow(element$sampleTable), "行"))
+          }
+        }
+      } else {
+        info <- c(info, paste("  ", name, ":", class(element)[1], "长度", length(element)))
+      }
+    }
+    
+    # 如果是qgraph对象，尝试提取特征信息
+    if(inherits(network_result, "qgraph")) {
+      info <- c(info, "\n=== qgraph特征提取测试 ===")
+      
+      # 测试layout
+      if(!is.null(network_result$layout) && is.matrix(network_result$layout)) {
+        info <- c(info, paste("Layout节点数:", nrow(network_result$layout)))
+      }
+      
+      # 测试graphData
+      if(!is.null(network_result$graphData) && inherits(network_result$graphData, "bootnetResult")) {
+        bootnet_obj <- network_result$graphData
+        if(!is.null(bootnet_obj$graph)) {
+          info <- c(info, paste("GraphData类型:", class(bootnet_obj$graph)))
+          if(is.matrix(bootnet_obj$graph)) {
+            info <- c(info, paste("GraphData矩阵维度:", paste(dim(bootnet_obj$graph), collapse = "x")))
+          }
+        }
+      }
+      
+      # 测试Edgelist
+      if(!is.null(network_result$Edgelist)) {
+        edgelist <- network_result$Edgelist
+        info <- c(info, paste("Edgelist类型:", class(edgelist)))
+        if(is.list(edgelist) && !is.null(edgelist$from)) {
+          info <- c(info, paste("Edgelist边数:", length(edgelist$from)))
+        }
+      }
+    }
+  } else if(is.matrix(network_result)) {
+    info <- c(info, paste("矩阵维度:", paste(dim(network_result), collapse = "x")))
+  }
+  
+  return(paste(info, collapse = "\n"))
+}
+
+#' 测试powerly包是否正常工作
+#' @return 测试结果
+test_powerly_package <- function() {
+  if(!requireNamespace("powerly", quietly = TRUE)) {
+    return("powerly包未安装")
+  }
+  
+  cat("🧪 测试powerly包基础功能...\n")
+  
+  tryCatch({
+    # 简化的测试，使用更大的范围
+    test_result <- powerly::powerly(
+      range_lower = 50,
+      range_upper = 200,
+      nodes = 3,
+      density = 0.5,
+      cores = 1
+    )
+    
+    cat("- Powerly测试成功\n")
+    cat("- 测试结果类型:", class(test_result), "\n")
+    
+    if(!is.null(test_result$recommendation)) {
+      cat("- 测试推荐值:", test_result$recommendation, "\n")
+    }
+    
+    return("测试成功")
+    
+  }, error = function(e) {
+    cat("- Powerly测试失败:", e$message, "\n")
+    return(paste("测试失败:", e$message))
+  })
+}

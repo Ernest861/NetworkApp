@@ -34,7 +34,7 @@ cat("✅ 应用文件检查完成\n")
 # 检查和安装必要的包（不包括bruceR）
 cat("📦 检查R包依赖...\n")
 
-required_packages <- c("shiny", "shinydashboard", "shinyWidgets", "DT", "readxl", "dplyr", "ggplot2", "bootnet", "bnlearn", "igraph")
+required_packages <- c("shiny", "shinydashboard", "shinyWidgets", "DT", "readxl", "dplyr", "ggplot2", "bootnet", "bnlearn", "igraph", "powerly")
 
 for(pkg in required_packages) {
   if(!requireNamespace(pkg, quietly = TRUE)) {

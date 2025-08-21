@@ -353,3 +353,100 @@ BAYESIAN_VIZ_CONFIG <- list(
     legend_position = "right"
   )
 )
+
+# =============================================================================
+# 样本量计算配置 (powerly)
+# =============================================================================
+
+# powerly 包参数配置
+POWERLY_CONFIG <- list(
+  # 默认参数设置
+  defaults = list(
+    range_lower = 300,           # 样本量搜索下限
+    range_upper = 2000,          # 样本量搜索上限
+    samples = 30,                # 从候选范围选择的样本量数量
+    replications = 30,           # 每个样本量的蒙特卡洛重复次数
+    measure = "sen",             # 性能测量类型：敏感性
+    statistic = "power",         # 统计指标：功效
+    measure_value = 0.6,         # 目标敏感性值
+    statistic_value = 0.8,       # 目标功效值
+    boots = 1000,                # Bootstrap次数
+    tolerance = 50,              # 收敛容差
+    iterations = 10,             # 最大迭代次数
+    cores = 2                    # 并行核心数（保守设置）
+  ),
+  
+  # 性能测量选项
+  measures = list(
+    "sen" = "敏感性 (Sensitivity)",
+    "spe" = "特异性 (Specificity)", 
+    "mcc" = "马修斯相关 (Matthews Correlation)",
+    "rho" = "皮尔逊相关 (Pearson Correlation)"
+  ),
+  
+  # 统计指标选项
+  statistics = list(
+    "power" = "统计功效 (Power)"
+  ),
+  
+  # 网络模型类型
+  models = list(
+    "ggm" = "高斯图模型 (Gaussian Graphical Model)"
+  ),
+  
+  # 推荐设置组合
+  presets = list(
+    "conservative" = list(
+      measure_value = 0.7,
+      statistic_value = 0.9,
+      boots = 5000,
+      range_upper = 3000,
+      description = "保守设置 - 高功效高敏感性"
+    ),
+    "balanced" = list(
+      measure_value = 0.6,
+      statistic_value = 0.8,
+      boots = 1000,
+      range_upper = 2000,
+      description = "平衡设置 - 推荐用于大多数研究"
+    ),
+    "exploratory" = list(
+      measure_value = 0.5,
+      statistic_value = 0.7,
+      boots = 500,
+      range_upper = 1500,
+      description = "探索性设置 - 适用于初步研究"
+    )
+  ),
+  
+  # 计算资源管理
+  performance = list(
+    max_cores = 6,               # 最大并行核心数
+    memory_save_threshold = 1000, # 样本量超过此值时启用内存节省模式
+    timeout_minutes = 30,        # 计算超时时间（分钟）
+    
+    # 基于网络规模的建议参数
+    network_size_adjustments = list(
+      small = list(nodes_max = 10, boots = 1000, cores = 2),
+      medium = list(nodes_max = 20, boots = 500, cores = 4),
+      large = list(nodes_max = 50, boots = 200, cores = 6)
+    )
+  ),
+  
+  # 结果解释指导
+  interpretation = list(
+    sample_size_ranges = list(
+      "very_small" = list(max = 100, interpretation = "样本量过小，不推荐进行网络分析"),
+      "small" = list(max = 300, interpretation = "小样本，结果需谨慎解释"),
+      "adequate" = list(max = 800, interpretation = "充足样本，可进行基础网络分析"),
+      "good" = list(max = 1500, interpretation = "良好样本，支持稳健的网络分析"),
+      "excellent" = list(max = 9999, interpretation = "优秀样本，支持复杂网络分析和比较")
+    ),
+    
+    density_effects = list(
+      low = list(max = 0.3, note = "低密度网络需要更大样本量"),
+      medium = list(max = 0.6, note = "中等密度网络，样本量需求适中"),
+      high = list(max = 1.0, note = "高密度网络，样本量需求相对较小")
+    )
+  )
+)

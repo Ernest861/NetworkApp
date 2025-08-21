@@ -136,6 +136,7 @@ ui <- dashboardPage(
       menuItem("网络温度分析", tabName = "temperature", icon = icon("thermometer-half")),
       menuItem("贝叶斯网络", tabName = "bayesian", icon = icon("brain")),
       menuItem("稳定性分析", tabName = "stability", icon = icon("chart-line")),
+      menuItem("样本量计算", tabName = "samplesize", icon = icon("calculator")),
       menuItem("结果下载", tabName = "download", icon = icon("download")),
       menuItem("使用说明", tabName = "help", icon = icon("question-circle"))
     ),
@@ -1505,6 +1506,197 @@ ui <- dashboardPage(
               div(class = "text-center", style = "padding: 100px;",
                   icon("chart-line", class = "fa-3x text-muted"), br(), br(),
                   tags$p("点击左侧按钮开始稳定性分析", class = "text-muted"))
+            )
+          )
+        )
+      ),
+      
+      # 样本量计算页面
+      tabItem(
+        tabName = "samplesize",
+        fluidRow(
+          box(
+            title = "样本量计算设置", status = "primary", solidHeader = TRUE, width = 4,
+            
+            conditionalPanel(
+              condition = "output.analysisComplete",
+              
+              h4("🔬 基于当前网络的样本量分析"),
+              
+              tags$div(style = "background-color: #f4f4f4; padding: 10px; border-radius: 5px; margin-bottom: 15px;",
+                h5("网络特征信息", style = "margin-top: 0;"),
+                verbatimTextOutput("network_features_info", placeholder = TRUE),
+                
+                # 添加调试信息展开按钮
+                conditionalPanel(
+                  condition = "output.analysisComplete",
+                  br(),
+                  actionButton("show_debug_info", "显示调试信息", class = "btn-xs btn-default", 
+                              style = "font-size: 10px;"),
+                  conditionalPanel(
+                    condition = "input.show_debug_info % 2 == 1",
+                    br(), br(),
+                    tags$div(style = "background-color: #fff; padding: 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 10px;",
+                      h6("调试信息：", style = "margin-top: 0; color: #666;"),
+                      verbatimTextOutput("debug_network_info", placeholder = TRUE)
+                    )
+                  )
+                )
+              ),
+              
+              h5("分析参数设置"),
+              
+              selectInput("powerly_preset", "预设配置", 
+                         choices = list(
+                           "平衡设置 (推荐)" = "balanced",
+                           "保守设置" = "conservative", 
+                           "探索性设置" = "exploratory"
+                         ),
+                         selected = "balanced"),
+              
+              numericInput("target_sensitivity", "目标敏感性", 
+                          value = 0.6, min = 0.3, max = 0.9, step = 0.05),
+              
+              numericInput("target_power", "目标功效", 
+                          value = 0.8, min = 0.6, max = 0.95, step = 0.05),
+              
+              fluidRow(
+                column(6, numericInput("sample_range_lower", "样本量下限", 
+                                     value = 300, min = 50, max = 1000, step = 50)),
+                column(6, numericInput("sample_range_upper", "样本量上限", 
+                                     value = 2000, min = 500, max = 5000, step = 100))
+              ),
+              
+              numericInput("powerly_boots", "Bootstrap次数", 
+                          value = 1000, min = 200, max = 5000, step = 200),
+              
+              fluidRow(
+                column(6, numericInput("powerly_cores", "并行核心数", 
+                                     value = 2, min = 1, max = 6, step = 1)),
+                column(6, numericInput("powerly_iterations", "最大迭代数", 
+                                     value = 10, min = 5, max = 20, step = 1))
+              ),
+              
+              br(),
+              
+              actionButton("run_sample_size", "开始样本量计算", 
+                          class = "btn-warning btn-block", 
+                          style = "font-weight: bold;"),
+              
+              br(), br(),
+              
+              conditionalPanel(
+                condition = "output.sampleSizeComplete",
+                tags$div(
+                  h5("💡 快速应用推荐样本量"),
+                  tags$p("基于计算结果的研究设计建议：", style = "font-size: 12px; color: #666;"),
+                  verbatimTextOutput("sample_size_recommendation", placeholder = TRUE),
+                  br(),
+                  downloadButton("download_sample_size", "下载样本量报告", class = "btn-info btn-block")
+                )
+              )
+            ),
+            
+            conditionalPanel(
+              condition = "!output.analysisComplete",
+              tags$div(style = "text-align: center; padding: 30px;",
+                icon("calculator", class = "fa-3x text-muted"), br(), br(),
+                tags$p("请先完成网络分析", class = "text-muted", style = "font-size: 14px;"),
+                tags$p("样本量计算需要基于网络密度和节点数进行", class = "text-muted", style = "font-size: 12px;")
+              )
+            )
+          ),
+          
+          box(
+            title = "样本量分析结果", status = "warning", solidHeader = TRUE, width = 8,
+            
+            conditionalPanel(
+              condition = "output.sampleSizeComplete",
+              tabsetPanel(
+                id = "sample_size_tabs",
+                
+                tabPanel("分析概览",
+                  tags$div(style = "padding: 20px;",
+                    h4("📊 样本量推荐结果"),
+                    verbatimTextOutput("sample_size_summary"),
+                    
+                    br(),
+                    
+                    tags$div(style = "background-color: #dff0d8; padding: 15px; border-radius: 5px; border-left: 4px solid #5cb85c;",
+                      h5("📋 研究设计建议", style = "color: #3c763d; margin-top: 0;"),
+                      htmlOutput("research_design_suggestions")
+                    )
+                  )
+                ),
+                
+                tabPanel("Step 1: 蒙特卡洛模拟",
+                  tags$div(style = "padding: 10px;",
+                    h5("样本量 vs 性能测量散点图"),
+                    plotOutput("powerly_step1_plot", height = "400px"),
+                    tags$p("显示不同样本量下的网络检测性能", class = "text-muted", style = "font-size: 12px;")
+                  )
+                ),
+                
+                tabPanel("Step 2: 曲线拟合",
+                  tags$div(style = "padding: 10px;",
+                    h5("单调曲线拟合和插值"),
+                    plotOutput("powerly_step2_plot", height = "400px"),
+                    tags$p("平滑的性能曲线和置信带", class = "text-muted", style = "font-size: 12px;")
+                  )
+                ),
+                
+                tabPanel("Step 3: Bootstrap分布",
+                  tags$div(style = "padding: 10px;",
+                    h5("样本量推荐的不确定性"),
+                    plotOutput("powerly_step3_plot", height = "400px"),
+                    tags$p("Bootstrap分布显示推荐样本量的置信区间", class = "text-muted", style = "font-size: 12px;")
+                  )
+                ),
+                
+                tabPanel("详细报告",
+                  tags$div(style = "padding: 20px;",
+                    h5("样本量分析详细报告"),
+                    verbatimTextOutput("detailed_sample_report"),
+                    
+                    br(),
+                    
+                    tags$div(style = "background-color: #f5f5f5; padding: 10px; border-radius: 3px;",
+                      h6("方法学说明："),
+                      tags$p("本分析基于Constantin等人(2021)开发的三步递归蒙特卡洛方法，专门用于网络模型的样本量计算。", 
+                             style = "font-size: 12px; margin-bottom: 5px;"),
+                      tags$p("参考文献：Constantin, M. A., Schuurman, N. K., & Vermunt, J. (2021). A General Monte Carlo Method for Sample Size Analysis in the Context of Network Models.", 
+                             style = "font-size: 11px; color: #666; margin-bottom: 0;")
+                    )
+                  )
+                )
+              )
+            ),
+            
+            conditionalPanel(
+              condition = "!output.sampleSizeComplete && output.analysisComplete",
+              tags$div(style = "text-align: center; padding: 100px;",
+                icon("calculator", class = "fa-3x text-muted"), br(), br(),
+                tags$h4("基于当前网络进行样本量分析", class = "text-muted"),
+                tags$p("点击左侧按钮开始计算推荐样本量", class = "text-muted"),
+                br(),
+                tags$div(style = "background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px;",
+                  tags$h6("💡 样本量计算说明"),
+                  tags$ul(style = "text-align: left; font-size: 12px; color: #666;",
+                    tags$li("自动提取当前网络的节点数和连接密度"),
+                    tags$li("使用蒙特卡洛方法模拟不同样本量下的网络检测性能"),
+                    tags$li("提供基于统计功效的样本量推荐"),
+                    tags$li("生成完整的分析报告和可视化结果")
+                  )
+                )
+              )
+            ),
+            
+            conditionalPanel(
+              condition = "!output.analysisComplete",
+              tags$div(style = "text-align: center; padding: 100px;",
+                icon("exclamation-circle", class = "fa-3x text-muted"), br(), br(),
+                tags$p("需要先完成网络分析才能进行样本量计算", class = "text-muted")
+              )
             )
           )
         )
@@ -8710,6 +8902,384 @@ server <- function(input, output, session) {
       )
     )
   })
+  
+  # =============================================================================
+  # 样本量计算模块
+  # =============================================================================
+  
+  # 网络特征信息输出
+  output$network_features_info <- renderText({
+    if(!is.null(values$network_result) && !is.null(values$analysis_data)) {
+      tryCatch({
+        features <- extract_network_features(values$network_result)
+        
+        # 安全地获取数据信息
+        n_subjects <- if(!is.null(values$analysis_data)) nrow(values$analysis_data) else "未知"
+        
+        complete_rate <- if(!is.null(values$analysis_data)) {
+          round(sum(complete.cases(values$analysis_data))/nrow(values$analysis_data)*100, 1)
+        } else {
+          "未知"
+        }
+        
+        paste0(
+          "节点数量: ", features$nodes, "\n",
+          "网络密度: ", round(features$density, 3), "\n", 
+          "当前样本量: ", n_subjects, "\n",
+          "数据完整性: ", complete_rate, "%\n",
+          "网络类型: ", if(!is.null(values$network_result)) class(values$network_result)[1] else "未知"
+        )
+      }, error = function(e) {
+        paste0(
+          "网络特征提取遇到问题\n",
+          "错误信息: ", e$message, "\n",
+          "请检查网络分析结果是否正常"
+        )
+      })
+    } else {
+      "请先完成网络分析\n\n说明：样本量计算需要基于\n已完成的网络分析结果"
+    }
+  })
+  
+  # 调试信息输出
+  output$debug_network_info <- renderText({
+    if(!is.null(values$network_result)) {
+      debug_network_structure(values$network_result)
+    } else {
+      "网络分析结果不可用"
+    }
+  })
+  
+  # 样本量计算按钮观察器
+  observeEvent(input$run_sample_size, {
+    req(values$network_result, values$analysis_data)
+    
+    # 检查powerly包是否可用
+    if(!requireNamespace("powerly", quietly = TRUE)) {
+      showNotification("错误：需要安装powerly包\n请运行: install.packages('powerly')", 
+                      type = "error", duration = 10)
+      return()
+    }
+    
+    # 显示计算开始信息
+    showNotification("⏳ 开始样本量计算，这可能需要几分钟...", 
+                    type = "message", duration = 5)
+    
+    # 执行样本量计算
+    tryCatch({
+      # 从网络结果提取特征
+      features <- extract_network_features(values$network_result)
+      
+      # 调用简化的样本量计算函数
+      result <- calculate_sample_size(
+        network_result = values$network_result,
+        nodes = features$nodes,
+        density = features$density,
+        range_lower = input$sample_range_lower %||% 300,
+        range_upper = input$sample_range_upper %||% 2000,
+        cores = input$powerly_cores %||% 2
+      )
+      
+      if(!is.null(result)) {
+        values$sample_size_result <- result
+        values$sample_size_complete <- TRUE
+        
+        # 立即添加样本量计算代码到完整脚本
+        if(!is.null(values$code_recorder) && !is.null(values$output_folder)) {
+          tryCatch({
+            # 加载样本量代码生成器
+            source('sample_size_code_gen.R')
+            
+            # 生成样本量计算代码
+            sample_size_code <- generate_sample_size_code(
+              features$nodes, 
+              features$density,
+              input$sample_range_lower %||% 300,
+              input$sample_range_upper %||% 2000,
+              input$powerly_cores %||% 2
+            )
+            
+            # 添加到代码记录器
+            old_length <- length(values$code_recorder)
+            values$code_recorder <- c(values$code_recorder, sample_size_code)
+            new_length <- length(values$code_recorder)
+            
+            cat("📋 代码记录器更新: ", old_length, " -> ", new_length, " 行\n")
+            cat("📊 样本量代码行数:", length(sample_size_code), "\n")
+            
+            # 更新完整脚本
+            script_path <- file.path(values$output_folder, "NetworkAnalysis_Complete_Script.R")
+            generate_complete_script(values$code_recorder, script_path)
+            cat("📝 已更新完整脚本（包含样本量计算）:", script_path, "\n")
+          }, error = function(e) {
+            cat("⚠️ 样本量计算脚本更新失败:", e$message, "\n")
+          })
+        }
+        
+        # 导出PDF文件到当前的结果文件夹
+        tryCatch({
+          # 使用当前网络分析的输出文件夹
+          output_dir <- if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
+            values$output_folder
+          } else {
+            getwd()  # 如果没有结果文件夹，使用当前目录
+          }
+          
+          exported_files <- export_powerly_plots(
+            powerly_result = result, 
+            output_dir = output_dir
+          )
+          
+          if(length(exported_files) > 0) {
+            showNotification(paste0("✅ 样本量计算完成！在 ", basename(output_dir), " 中导出了", length(exported_files), "个PDF文件"), 
+                            type = "message", duration = 8)
+          } else {
+            showNotification("✅ 样本量计算完成！（PDF导出失败）", type = "warning", duration = 5)
+          }
+        }, error = function(e) {
+          cat("PDF导出失败:", e$message, "\n")
+          showNotification(paste0("✅ 样本量计算完成！（PDF导出错误: ", e$message, "）"), type = "warning", duration = 8)
+        })
+      } else {
+        showNotification("❌ 样本量计算失败，请检查参数设置", 
+                        type = "error", duration = 5)
+      }
+      
+    }, error = function(e) {
+      cat("样本量计算错误:", e$message, "\n")
+      showNotification(paste("计算错误:", e$message), 
+                      type = "error", duration = 8)
+    })
+  })
+  
+  # 样本量分析完成状态
+  output$sampleSizeComplete <- reactive({
+    !is.null(values$sample_size_complete) && values$sample_size_complete
+  })
+  outputOptions(output, "sampleSizeComplete", suspendWhenHidden = FALSE)
+  
+  # 样本量分析结果摘要
+  output$sample_size_summary <- renderText({
+    if(!is.null(values$sample_size_result)) {
+      result <- values$sample_size_result
+      
+      # 安全地获取推荐样本量（支持confidence interval格式）
+      recommendation <- tryCatch({
+        if(!is.null(result$recommendation)) {
+          if(is.numeric(result$recommendation) && length(result$recommendation) > 1) {
+            # 置信区间格式
+            paste0("2.5% = ", round(result$recommendation[1]), " | ", 
+                   "50% = ", round(result$recommendation[2]), " | ", 
+                   "97.5% = ", round(result$recommendation[3]))
+          } else {
+            as.character(result$recommendation)
+          }
+        } else {
+          "无法确定"
+        }
+      }, error = function(e) "无法确定")
+      
+      # 安全地获取网络信息
+      network_info <- if(!is.null(result$network_info)) result$network_info else list()
+      nodes <- if(!is.null(network_info$nodes)) network_info$nodes else "未知"
+      density <- if(!is.null(network_info$density)) round(network_info$density, 3) else "未知"
+      analysis_date <- if(!is.null(network_info$analysis_date)) {
+        format(network_info$analysis_date, "%Y-%m-%d %H:%M")
+      } else {
+        "未知"
+      }
+      
+      paste0(
+        "🎯 推荐样本量: ", recommendation, "\n",
+        "📊 网络节点数: ", nodes, "\n",
+        "🔗 网络密度: ", density, "\n",
+        "📅 分析时间: ", analysis_date
+      )
+    } else {
+      "样本量分析未完成"
+    }
+  })
+  
+  # 样本量推荐简要版
+  output$sample_size_recommendation <- renderText({
+    if(!is.null(values$sample_size_result)) {
+      result <- values$sample_size_result
+      
+      # 安全地获取推荐样本量（单个数值）
+      recommendation <- tryCatch({
+        if(!is.null(result$recommendation)) {
+          rec <- result$recommendation
+          if(is.numeric(rec) && length(rec) > 1) {
+            rec[length(rec) %/% 2 + 1]  # 取中间值
+          } else {
+            as.numeric(rec)[1]
+          }
+        } else {
+          NULL
+        }
+      }, error = function(e) NULL)
+      
+      if(!is.null(recommendation) && is.numeric(recommendation) && length(recommendation) == 1) {
+        interpretation <- interpret_sample_size(recommendation)
+        paste0(
+          "推荐样本量: ", round(recommendation), "\n",
+          "质量评价: ", interpretation
+        )
+      } else {
+        "无法确定推荐样本量"
+      }
+    } else {
+      "请先运行样本量分析"
+    }
+  })
+  
+  # 研究设计建议
+  output$research_design_suggestions <- renderUI({
+    if(!is.null(values$sample_size_result)) {
+      result <- values$sample_size_result
+      
+      # 安全地获取推荐样本量（单个数值）
+      recommendation <- tryCatch({
+        if(!is.null(result$recommendation)) {
+          rec <- result$recommendation
+          if(is.numeric(rec) && length(rec) > 1) {
+            rec[length(rec) %/% 2 + 1]  # 取中间值
+          } else {
+            as.numeric(rec)[1]
+          }
+        } else {
+          NULL
+        }
+      }, error = function(e) NULL)
+      
+      if(!is.null(recommendation) && is.numeric(recommendation) && length(recommendation) == 1 && !is.na(recommendation)) {
+        # 计算建议范围
+        rec_rounded <- round(recommendation)
+        conservative_n <- ceiling(rec_rounded * 1.2)
+        minimum_n <- ceiling(rec_rounded * 0.8)
+        
+        tagList(
+          tags$p(tags$strong("样本量建议：")),
+          tags$ul(
+            tags$li(paste0("最小样本量: ", minimum_n, " (80%功效)")),
+            tags$li(paste0("推荐样本量: ", rec_rounded, " (目标功效)")),
+            tags$li(paste0("保守样本量: ", conservative_n, " (20%缓冲)"))
+          ),
+          tags$p(tags$strong("研究设计考虑：")),
+          tags$ul(
+            tags$li("建议预留20-30%的样本量以应对数据缺失"),
+            tags$li("对于多时点研究，需要考虑随访流失率"),
+            tags$li("如需进行亚组分析，每个亚组至少需要推荐样本量的50%")
+          )
+        )
+      } else {
+        tags$p("样本量推荐不可用")
+      }
+    } else {
+      tags$p("请先完成样本量分析")
+    }
+  })
+  
+  # Step 1 可视化
+  output$powerly_step1_plot <- renderPlot({
+    req(values$sample_size_result)
+    if(!is.null(values$sample_size_result) && 
+       requireNamespace("powerly", quietly = TRUE)) {
+      tryCatch({
+        # 使用原始结果进行绘图
+        original_result <- if(!is.null(values$sample_size_result$original_result)) {
+          values$sample_size_result$original_result
+        } else {
+          values$sample_size_result
+        }
+        plot(original_result, step = 1)
+      }, error = function(e) {
+        plot.new()
+        text(0.5, 0.5, paste("Step 1 图表失败:", e$message), cex = 1, col = "red")
+      })
+    }
+  })
+  
+  # Step 2 可视化
+  output$powerly_step2_plot <- renderPlot({
+    req(values$sample_size_result)
+    if(!is.null(values$sample_size_result) && 
+       requireNamespace("powerly", quietly = TRUE)) {
+      tryCatch({
+        # 使用原始结果进行绘图
+        original_result <- if(!is.null(values$sample_size_result$original_result)) {
+          values$sample_size_result$original_result
+        } else {
+          values$sample_size_result
+        }
+        plot(original_result, step = 2)
+      }, error = function(e) {
+        plot.new()
+        text(0.5, 0.5, paste("Step 2 图表失败:", e$message), cex = 1, col = "red")
+      })
+    }
+  })
+  
+  # Step 3 可视化
+  output$powerly_step3_plot <- renderPlot({
+    req(values$sample_size_result)
+    if(!is.null(values$sample_size_result) && 
+       requireNamespace("powerly", quietly = TRUE)) {
+      tryCatch({
+        # 使用原始结果进行绘图
+        original_result <- if(!is.null(values$sample_size_result$original_result)) {
+          values$sample_size_result$original_result
+        } else {
+          values$sample_size_result
+        }
+        plot(original_result, step = 3)
+      }, error = function(e) {
+        plot.new()
+        text(0.5, 0.5, paste("Step 3 图表失败:", e$message), cex = 1, col = "red")
+      })
+    }
+  })
+  
+  # 详细报告
+  output$detailed_sample_report <- renderText({
+    if(!is.null(values$sample_size_result)) {
+      generate_sample_size_report(values$sample_size_result)
+    } else {
+      "详细报告不可用"
+    }
+  })
+  
+  # 样本量报告下载
+  output$download_sample_size <- downloadHandler(
+    filename = function() {
+      paste0("sample_size_analysis_", Sys.Date(), ".html")
+    },
+    content = function(file) {
+      if(!is.null(values$sample_size_result)) {
+        # 生成HTML报告
+        report_content <- generate_sample_size_report(values$sample_size_result)
+        
+        # 转换为HTML格式
+        html_content <- paste0(
+          "<!DOCTYPE html><html><head>",
+          "<meta charset='UTF-8'>",
+          "<title>样本量分析报告</title>",
+          "<style>",
+          "body { font-family: Arial, sans-serif; margin: 40px; }",
+          "h1 { color: #2c3e50; }",
+          "h2 { color: #3498db; border-bottom: 2px solid #3498db; }",
+          "pre { background-color: #f8f9fa; padding: 10px; border-radius: 5px; }",
+          "</style>",
+          "</head><body>",
+          "<h1>样本量分析报告</h1>",
+          gsub("\n", "<br>", report_content),
+          "</body></html>"
+        )
+        
+        writeLines(html_content, file, useBytes = TRUE)
+      }
+    }
+  )
   
   # 首页"开始分析"按钮观察器
   observeEvent(input$start_analysis, {
