@@ -3582,7 +3582,7 @@ server <- function(input, output, session) {
                   tryCatch({
                     if(requireNamespace("quickNet", quietly = TRUE)) {
                       timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
-                      prefix_network <- paste0("Fig3B_bridge_network_", timestamp)
+                      prefix_network <- paste0("Fig2a_bridge_network_", timestamp)
                       
                       # 设置工作目录到输出文件夹
                       if(!is.null(values$output_folder)) {
@@ -3609,7 +3609,7 @@ server <- function(input, output, session) {
                   tryCatch({
                     if(requireNamespace("quickNet", quietly = TRUE)) {
                       timestamp <- values$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
-                      prefix_centrality <- paste0("Fig3c_bridge_centrality_", timestamp)
+                      prefix_centrality <- paste0("Fig2b_bridge_centrality_", timestamp)
                       
                       # 设置工作目录到输出文件夹
                       if(!is.null(values$output_folder)) {
@@ -4123,7 +4123,7 @@ server <- function(input, output, session) {
                   "",
                   "# 生成稳定性图表",
                   paste0('timestamp <- "', timestamp, '"'),
-                  'prefix <- paste0("SFig2_network_stability_", timestamp)',
+                  'prefix <- paste0("FigS2_network_stability_", timestamp)',
                   'get_stability_plot(sta_result, prefix = prefix, width = 6, height = 4.5)',
                   'cat("网络稳定性分析完成，图表已保存\\n")'
                 )
@@ -4133,7 +4133,7 @@ server <- function(input, output, session) {
                 values$stability_complete <- sta_result
                 
                 # 使用get_stability_plot生成专业的稳定性图表
-                s1_prefix <- paste0("S1_network_stability_", timestamp)
+                s1_prefix <- paste0("FigS1_network_stability_", timestamp)
                 get_stability_plot(sta_result, prefix = s1_prefix, width = 8, height = 6)
                 
                 values$network_stability_pdf <- paste0(s1_prefix, "_stability_plot.pdf")
@@ -4141,55 +4141,7 @@ server <- function(input, output, session) {
                 cat("S1网络稳定性图表已生成:", values$network_stability_pdf, "\n")
               }
               
-              # S2: 中心性稳定性分析（对应Fig2中心性图的稳定性）
-              if(!is.null(values$centrality_stability)) {
-                s2_prefix <- paste0("S2_centrality_stability_", timestamp)
-                
-                # 生成中心性稳定性图
-                pdf(paste0(s2_prefix, "_centrality_stability.pdf"), width = 8, height = 6)
-                plot(values$centrality_stability, statistics = c("strength", "closeness", "betweenness"))
-                dev.off()
-                
-                values$centrality_stability_pdf <- paste0(s2_prefix, "_centrality_stability.pdf")
-                cat("S2中心性稳定性图表已生成:", values$centrality_stability_pdf, "\n")
-                
-                # S2相关的CS系数分析
-                cs_pdf_file <- paste0(s2_prefix, "_cs_coefficient.pdf")
-                pdf(cs_pdf_file, width = 8, height = 6)
-                plot(values$centrality_stability, "strength")
-                dev.off()
-                
-                values$cs_coefficient_pdf <- cs_pdf_file
-                
-                # 保存CS系数数据
-                cs_data_file <- paste0(s2_prefix, "_cs_coefficient.csv")
-                tryCatch({
-                  cs_stats <- corStability(values$centrality_stability)
-                  cs_df <- data.frame(
-                    Statistic = names(cs_stats),
-                    CS_Coefficient = as.numeric(cs_stats),
-                    Interpretation = ifelse(as.numeric(cs_stats) > 0.5, "稳定 (>0.5)", 
-                                          ifelse(as.numeric(cs_stats) > 0.25, "可接受 (0.25-0.5)", "不稳定 (<0.25)"))
-                  )
-                  write.csv(cs_df, cs_data_file, row.names = FALSE)
-                  cat("S2 CS系数数据已保存:", cs_data_file, "\n")
-                }, error = function(e) {
-                  cat("保存CS系数数据失败:", e$message, "\n")
-                })
-              }
               
-              # S3: 边稳定性分析（对应主网络边的稳定性，如果有的话）
-              if(!is.null(values$edge_stability)) {
-                s3_prefix <- paste0("S3_edge_stability_", timestamp)
-                s3_pdf_file <- paste0(s3_prefix, "_edge_stability.pdf")
-                
-                pdf(s3_pdf_file, width = 8, height = 6)
-                plot(values$edge_stability, labels = FALSE, order = "sample")
-                dev.off()
-                
-                values$edge_stability_pdf <- s3_pdf_file
-                cat("S3边稳定性图表已生成:", values$edge_stability_pdf, "\n")
-              }
               
             } else {
               showNotification("需要quickNet包进行稳定性分析", type = "warning")
@@ -4255,27 +4207,10 @@ server <- function(input, output, session) {
       }
     }
     
-    # S2: 中心性稳定性（对应Fig2中心性图）
-    if(!is.null(values$stability_result$centrality_stability)) {
-      result <- paste0(result, "\n✓ S2: 中心性稳定性分析已完成\n")
-      if(!is.null(values$centrality_stability_pdf)) {
-        result <- paste0(result, "  📊 ", basename(values$centrality_stability_pdf), " (对应Fig2中心性图)\n")
-      }
-      if(!is.null(values$cs_coefficient_pdf)) {
-        result <- paste0(result, "  📊 ", basename(values$cs_coefficient_pdf), " (CS系数)\n")
-      }
-    }
     
-    # S3: 边稳定性（对应主网络边）
-    if(!is.null(values$stability_result$edge_stability)) {
-      result <- paste0(result, "\n✓ S3: 边稳定性分析已完成\n")
-      if(!is.null(values$edge_stability_pdf)) {
-        result <- paste0(result, "  📊 ", basename(values$edge_stability_pdf), " (网络边稳定性)\n")
-      }
-    }
     
     result <- paste0(result, "\n📁 文件组织说明:\n",
-                    "   S1-S3: 对应Fig1-Fig3主图的稳定性分析\n",
+                    "   S1: 对应Fig1主图的稳定性分析\n",
                     "   网页显示实时图表，PDF用于论文发表\n",
                     "   所有辅助材料保存到results文件夹\n")
     
