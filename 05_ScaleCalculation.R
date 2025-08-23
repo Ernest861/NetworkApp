@@ -268,17 +268,23 @@ calculate_scale_scores <- function(data, scale_name, existing_items, reverse_ite
   # 计算总分
   if (calculation_method == "mean") {
     scale_score <- rowMeans(scale_data, na.rm = TRUE)
+  } else if (calculation_method == "special") {
+    # 特殊计算方法：不在这里计算总分，由特殊逻辑函数处理
+    # 跳过总分计算，因为特殊逻辑已经处理了
+    scale_score <- NULL
   } else {
     scale_score <- rowSums(scale_data, na.rm = TRUE)
   }
   
-  # 不满足最少题目数的设为NA
-  scale_score[valid_count < min_valid_items] <- NA
-  
-  # 添加总分到数据
-  total_var_name <- paste0(scale_name, "_Total")
-  data[[total_var_name]] <- scale_score
-  new_variables <- c(new_variables, total_var_name)
+  # 添加总分到数据（特殊方法除外）
+  if (!is.null(scale_score)) {
+    # 不满足最少题目数的设为NA
+    scale_score[valid_count < min_valid_items] <- NA
+    
+    total_var_name <- paste0(scale_name, "_Total")
+    data[[total_var_name]] <- scale_score
+    new_variables <- c(new_variables, total_var_name)
+  }
   
   # 计算子量表
   if (!is.na(subscales_definition) && subscales_definition != "") {
@@ -313,6 +319,10 @@ calculate_subscales <- function(data, scale_data, scale_name, subscales_definiti
           
           if (calculation_method == "mean") {
             subscale_score <- rowMeans(subscale_data, na.rm = TRUE)
+          } else if (calculation_method == "special") {
+            # 特殊方法：子量表已经由特殊逻辑函数处理了（如dsm1, dsm2等）
+            # 跳过常规子量表计算
+            next
           } else {
             subscale_score <- rowSums(subscale_data, na.rm = TRUE)
           }
@@ -478,7 +488,14 @@ calculate_group_statistics <- function(data, items, scale_name) {
 apply_special_logic <- function(data, scale_name, item_prefix, item_numbers, special_logic) {
   if (special_logic == "HRF_dimensions") {
     return(calculate_hrf_dimensions(data, scale_name, item_prefix, item_numbers))
+  } else if (grepl("recode_1_5to1;dsm_binary_logic", special_logic)) {
+    # NSSI_DSM5特殊处理：先重编码1-5到0-1，然后应用DSM诊断逻辑
+    return(calculate_nssi_dsm5_logic(data, scale_name, item_prefix, item_numbers))
+  } else if (grepl("minus_1_first", special_logic)) {
+    # YFAS系列：先减1处理
+    return(apply_minus_1_first(data, scale_name, item_prefix, item_numbers, special_logic))
   }
+  
   # 可以添加更多特殊逻辑
   return(data)
 }
@@ -643,9 +660,129 @@ save_results <- function(data, processing_report, scale_results, reliability_res
   ))
 }
 
+#' NSSI DSM-5 特殊逻辑处理
+#' 
+#' 实现recode_1_5to1和dsm_binary_logic逻辑：
+#' 1. recode_1_5to1: 将1-5分重编码为0-1（1→0, 2-5→1）
+#' 2. dsm_binary_logic: 应用DSM-5诊断标准
+#' 
+calculate_nssi_dsm5_logic <- function(data, scale_name, item_prefix, item_numbers) {
+  
+  log_entry(paste("开始NSSI_DSM5特殊逻辑处理，量表:", scale_name))
+  
+  # 构建题目变量名
+  item_vars <- paste0(item_prefix, item_numbers)
+  existing_items <- item_vars[item_vars %in% names(data)]
+  
+  if(length(existing_items) == 0) {
+    log_entry("未找到NSSI_DSM5题目", "WARNING")
+    return(data)
+  }
+  
+  log_entry(paste("找到NSSI题目:", length(existing_items), "个:", paste(existing_items, collapse=", ")))
+  
+  # 第1步：recode_1_5to1 - 将1-5分重编码为0-1
+  for(item in existing_items) {
+    original_values <- data[[item]]
+    # 1分 → 0分（没有）, 2-5分 → 1分（有）
+    recoded_values <- ifelse(is.na(original_values), NA,
+                           ifelse(original_values == 1, 0, 1))
+    
+    data[[item]] <- recoded_values
+    
+    log_entry(paste("重编码", item, ": 1→0, 2-5→1"))
+  }
+  
+  # 第2步：dsm_binary_logic - 应用DSM诊断逻辑
+  # 根据配置：dsm1:1|dsm2:2,3,4,5,6|dsm3:7,8,9,10|dsm4:4|dsm5:5|dsm6:6
+  
+  # DSM标准1: 题目1（反复从事自我伤害行为）
+  if(paste0(item_prefix, "1") %in% names(data)) {
+    data[["dsm1"]] <- data[[paste0(item_prefix, "1")]]
+    log_entry("创建dsm1: 基于题目1")
+  }
+  
+  # DSM标准2: 题目2,3,4,5,6中任一为1（自伤动机）
+  dsm2_items <- paste0(item_prefix, c(2,3,4,5,6))
+  dsm2_existing <- dsm2_items[dsm2_items %in% names(data)]
+  if(length(dsm2_existing) > 0) {
+    data[["dsm2"]] <- ifelse(
+      rowSums(data[dsm2_existing], na.rm = TRUE) >= 1, 1, 0
+    )
+    log_entry(paste("创建dsm2: 基于题目", paste(dsm2_existing, collapse=",")))
+  }
+  
+  # DSM标准3: 题目7,8,9,10中任一为1（如果有这些题目的话，当前配置中没有）
+  # dsm3_items <- paste0(item_prefix, c(7,8,9,10))
+  # 当前NSSI_DSM5只有6题，所以dsm3暂时设为0或基于现有逻辑
+  
+  # DSM标准4: 题目4（社会功能受损）  
+  if(paste0(item_prefix, "4") %in% names(data)) {
+    data[["dsm4"]] <- data[[paste0(item_prefix, "4")]]
+    log_entry("创建dsm4: 基于题目4")
+  }
+  
+  # DSM标准5: 题目5（不是自杀行为）
+  if(paste0(item_prefix, "5") %in% names(data)) {
+    data[["dsm5"]] <- data[[paste0(item_prefix, "5")]]
+    log_entry("创建dsm5: 基于题目5") 
+  }
+  
+  # DSM标准6: 题目6（不是在精神病性发作期间）
+  if(paste0(item_prefix, "6") %in% names(data)) {
+    data[["dsm6"]] <- data[[paste0(item_prefix, "6")]]
+    log_entry("创建dsm6: 基于题目6")
+  }
+  
+  # 计算DSM-5诊断总分（满足的标准数量）
+  dsm_vars <- paste0("dsm", 1:6)
+  existing_dsm <- dsm_vars[dsm_vars %in% names(data)]
+  
+  if(length(existing_dsm) > 0) {
+    data[[paste0(scale_name, "_Total")]] <- rowSums(data[existing_dsm], na.rm = TRUE)
+    log_entry(paste("创建", paste0(scale_name, "_Total"), ": DSM标准总分"))
+  }
+  
+  # 创建诊断结果（通常需要满足多个标准）
+  if(length(existing_dsm) >= 4) {
+    # 简化的诊断逻辑：满足4个或以上标准
+    data[[paste0(scale_name, "_Diagnosis")]] <- ifelse(
+      data[[paste0(scale_name, "_Total")]] >= 4, 1, 0
+    )
+    log_entry("创建诊断变量: 满足4+标准为阳性")
+  }
+  
+  log_entry("NSSI_DSM5特殊逻辑处理完成")
+  return(data)
+}
+
+#' YFAS系列特殊逻辑：minus_1_first
+#' 
+apply_minus_1_first <- function(data, scale_name, item_prefix, item_numbers, special_logic) {
+  
+  log_entry(paste("应用minus_1_first逻辑，量表:", scale_name))
+  
+  # 构建题目变量名
+  item_vars <- paste0(item_prefix, item_numbers)
+  existing_items <- item_vars[item_vars %in% names(data)]
+  
+  # 对所有题目先减1
+  for(item in existing_items) {
+    data[[item]] <- data[[item]] - 1
+    log_entry(paste("题目", item, "减1处理"))
+  }
+  
+  # 检查是否还有其他逻辑需要处理
+  if(grepl("threshold_scoring", special_logic)) {
+    log_entry("检测到threshold_scoring逻辑，需要进一步实现")
+  }
+  
+  return(data)
+}
+
 # =============================================================================
 # 使用示例
 # =============================================================================
 
 # 运行增强版量表计算
-result5 <- calculate_scales()
+# result5 <- calculate_scales()

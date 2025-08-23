@@ -31,6 +31,26 @@ tryCatch({
   cat("Warning: config.R loading failed:", e$message, "\n")
 })
 
+# # 加载过程数据保存系统（已禁用）
+# tryCatch({
+#   source("process_data_saver.R", encoding = "UTF-8")
+#   cat("💾 过程数据保存系统已加载\n")
+# }, error = function(e) {
+#   cat("Warning: process_data_saver.R loading failed:", e$message, "\n")
+#   # 提供空的fallback函数
+#   create_results_structure <<- function(base_folder) { return(list()) }
+#   saveProcessData <<- function(...) { return(list(success = FALSE)) }
+#   initializeProcessDataSaver <<- function(...) { return(list(success = FALSE)) }
+#   generateAnalysisSummary <<- function(...) { return(NULL) }
+#   cat("⚠️ 过程数据保存系统不可用，将使用原有保存方式\n")
+# })
+
+# 提供空的fallback函数
+create_results_structure <- function(base_folder) { return(list()) }
+saveProcessData <- function(...) { return(list(success = FALSE)) }
+initializeProcessDataSaver <- function(...) { return(list(success = FALSE)) }
+generateAnalysisSummary <- function(...) { return(NULL) }
+
 tryCatch({
   source("utils.R", encoding = "UTF-8")  
 }, error = function(e) {
@@ -128,6 +148,7 @@ ui <- dashboardPage(
   
   dashboardSidebar(
     sidebarMenu(
+      id = "sidebar",
       menuItem("首页", tabName = "homepage", icon = icon("home")),
       menuItem("数据上传", tabName = "upload", icon = icon("upload")),
       menuItem("变量构造", tabName = "construct", icon = icon("calculator")),
@@ -537,7 +558,19 @@ ui <- dashboardPage(
               condition = "!output.dataUploaded",
               div(class = "text-center", style = "padding: 30px;",
                 icon("upload", class = "fa-2x text-muted"), br(), br(),
-                h5("请先上传数据", class = "text-muted"))
+                h5("请先上传数据", class = "text-muted"),
+                br(),
+                div(
+                  style = "background-color: #f0f8ff; padding: 15px; border-radius: 5px; margin-top: 20px; text-align: left;",
+                  h6("💡 快速开始选项：", style = "color: #0056b3; margin-bottom: 10px; text-align: center;"),
+                  fileInput("load_state_construct", "📂 导入保存的分析状态",
+                           accept = ".rds",
+                           buttonLabel = "选择RDS文件",
+                           placeholder = "跳过数据上传，直接导入状态"),
+                  tags$small("如果您之前保存过完整的分析状态，可以直接导入继续分析。", 
+                            style = "color: #666; font-style: italic;")
+                )
+              )
             ),
             
             conditionalPanel(
@@ -635,8 +668,14 @@ ui <- dashboardPage(
           box(
             title = "📈 计算结果", status = "success", solidHeader = TRUE, width = 12,
             
+            # 显示从状态导入的数据信息
             conditionalPanel(
-              condition = "!output.scalesCalculated",
+              condition = "output.dataUploaded && !output.scalesCalculated",
+              uiOutput("imported_state_info")
+            ),
+            
+            conditionalPanel(
+              condition = "!output.dataUploaded && !output.scalesCalculated",
               div(class = "text-center", style = "padding: 30px;",
                 icon("hourglass-half", class = "fa-2x text-muted"), br(), br(),
                 h5("点击上方按钮开始计算", class = "text-muted"))
@@ -703,6 +742,12 @@ ui <- dashboardPage(
               
               br(),
               
+              h5("📊 变量频数分布："),
+              helpText("显示每个变量的取值分布情况，红色标记表示该类别占比<5%，可能影响网络分析结果。"),
+              htmlOutput("frequency_distribution_display"),
+              
+              br(),
+              
               h5("🎨 变量分组配色："),
               helpText("同组量表的变量将使用相同颜色在网络图中显示，便于识别量表聚类。"),
               div(
@@ -721,6 +766,27 @@ ui <- dashboardPage(
               ),
               
               br(),
+              
+              # 状态保存和读取功能
+              div(
+                style = "background-color: #f0f8ff; padding: 15px; border-radius: 5px; margin-bottom: 15px;",
+                h5("💾 数据状态保存/读取", style = "color: #0056b3; margin-bottom: 10px;"),
+                fluidRow(
+                  column(6,
+                    actionButton("save_app_state", "💾 保存当前状态", 
+                                class = "btn-info", style = "width: 100%;"),
+                    br(),
+                    tags$small("保存数据和变量配置到RDS文件", style = "color: #666;")
+                  ),
+                  column(6,
+                    fileInput("load_app_state", "📂 读取保存的状态",
+                             accept = ".rds",
+                             buttonLabel = "选择RDS文件",
+                             placeholder = "未选择文件"),
+                    tags$small("从RDS文件恢复数据和配置", style = "color: #666;")
+                  )
+                )
+              ),
               
               div(class = "text-center",
                   actionButton("confirm_variables", "✓ 确认变量选择", 
@@ -1895,8 +1961,166 @@ server <- function(input, output, session) {
     bridge_compare_result = NULL,
     # 文件输出相关
     upload_timestamp = NULL,
-    output_folder = NULL
+    output_folder = NULL,
+    # 过程数据保存系统
+    folder_paths = NULL,
+    process_saver_enabled = FALSE,
+    analysis_summary = NULL
   )
+  
+  # =============================================================================
+  # 状态保存和读取功能
+  # =============================================================================
+  
+  # 保存应用状态到RDS文件
+  saveAppState <- function() {
+    # 保存整个values反应式环境中的所有变量
+    all_values <- reactiveValuesToList(values)
+    
+    # 添加元信息
+    app_state <- list(
+      # 所有反应式变量
+      values_environment = all_values,
+      
+      # 元信息（包含向后兼容性字段）
+      save_time = Sys.time(),
+      app_version = "v3.0",
+      upload_timestamp = all_values$upload_timestamp,  # 向后兼容
+      output_folder = all_values$output_folder,        # 向后兼容
+      data_summary = if(!is.null(all_values$processed_data)) {
+        list(
+          n_rows = nrow(all_values$processed_data),
+          n_cols = ncol(all_values$processed_data),
+          column_names = names(all_values$processed_data)
+        )
+      } else NULL,
+      
+      # 会话信息（可选，用于调试）
+      session_info = list(
+        r_version = R.version.string,
+        packages = sessionInfo()$otherPkgs
+      )
+    )
+    
+    return(app_state)
+  }
+  
+  # 从RDS文件读取应用状态
+  loadAppState <- function(state_data) {
+    tryCatch({
+      # 验证状态数据的基本结构
+      if(!is.list(state_data)) {
+        stop("无效的状态数据格式")
+      }
+      
+      # 检查是否为新格式（包含values_environment）
+      if(!is.null(state_data$values_environment)) {
+        # 新格式：恢复整个values环境
+        all_saved_values <- state_data$values_environment
+        
+        # 批量恢复所有保存的反应式变量
+        for(var_name in names(all_saved_values)) {
+          values[[var_name]] <- all_saved_values[[var_name]]
+        }
+        
+        cat("已恢复", length(all_saved_values), "个环境变量\n")
+        
+        # 如果环境变量中没有upload_timestamp，从元数据中获取或生成新的
+        if(is.null(values$upload_timestamp)) {
+          values$upload_timestamp <- state_data$upload_timestamp %||% format(Sys.time(), "%Y%m%d_%H%M%S")
+        }
+        
+      } else {
+        # 兼容旧格式：逐个恢复变量
+        values$raw_data <- state_data$raw_data
+        values$processed_data <- state_data$processed_data
+        values$scales <- state_data$scales
+        values$validation_result <- state_data$validation_result
+        values$calculated_scales <- state_data$calculated_scales
+        values$analysis_data <- state_data$analysis_data
+        values$final_variables <- state_data$final_variables
+        values$variables_confirmed <- state_data$variables_confirmed %||% FALSE
+        values$scale_groups <- state_data$scale_groups
+        values$variable_groups <- state_data$variable_groups
+        values$upload_timestamp <- state_data$upload_timestamp
+        
+        cat("已恢复旧格式状态文件\n")
+      }
+      
+      # 重建输出文件夹结构
+      # 优先从环境变量中获取，然后从元数据中获取
+      saved_output_folder <- values$output_folder %||% state_data$output_folder
+      saved_timestamp <- values$upload_timestamp %||% state_data$upload_timestamp
+      
+      if(!is.null(saved_output_folder) && !is.null(saved_timestamp)) {
+        # 如果状态文件中保存了原始输出文件夹路径，尝试使用
+        if(dir.exists(saved_output_folder)) {
+          values$output_folder <- saved_output_folder
+          cat("恢复原始输出文件夹:", saved_output_folder, "\n")
+        } else {
+          # 如果原始文件夹不存在，基于时间戳重新创建
+          new_folder <- file.path(getwd(), paste0("results_", saved_timestamp))
+          values$output_folder <- new_folder
+          if(!dir.exists(new_folder)) {
+            dir.create(new_folder, recursive = TRUE)
+            cat("重新创建输出文件夹:", new_folder, "\n")
+          }
+        }
+      } else if(!is.null(saved_timestamp)) {
+        # 基于时间戳创建文件夹
+        new_folder <- file.path(getwd(), paste0("results_", saved_timestamp))
+        values$output_folder <- new_folder
+        if(!dir.exists(new_folder)) {
+          dir.create(new_folder, recursive = TRUE)
+          cat("基于时间戳创建输出文件夹:", new_folder, "\n")
+        }
+      } else {
+        # 如果没有时间戳，创建一个新的
+        current_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+        values$upload_timestamp <- current_timestamp
+        new_folder <- file.path(getwd(), paste0("results_", current_timestamp))
+        values$output_folder <- new_folder
+        if(!dir.exists(new_folder)) {
+          dir.create(new_folder, recursive = TRUE)
+          cat("创建新的输出文件夹:", new_folder, "\n")
+        }
+      }
+      
+      # 重置网络分析结果（避免状态不一致）
+      # 对于新格式，如果分析结果已经在环境中保存，则不重置
+      if(is.null(state_data$values_environment)) {
+        # 只在旧格式中重置分析结果
+        values$network_result <- NULL
+        values$centrality_result <- NULL
+        values$stability_result <- NULL
+        values$bayesian_result <- NULL
+        values$bridge_result <- NULL
+        values$bridge_network <- NULL
+        values$temperature_result <- NULL
+        values$netcompare_result <- NULL
+      } else {
+        # 新格式：如果环境中没有这些结果，确保它们为NULL
+        # 这样可以避免状态不一致，但保留已保存的分析结果
+        cat("新格式：保留环境中的分析结果\n")
+      }
+      
+      # 返回加载摘要信息
+      summary_info <- list(
+        success = TRUE,
+        save_time = state_data$save_time %||% "未知",
+        app_version = state_data$app_version %||% "未知",
+        data_info = if(!is.null(state_data$data_summary)) {
+          paste0(state_data$data_summary$n_rows, "行×", state_data$data_summary$n_cols, "列")
+        } else "未知",
+        output_folder = basename(values$output_folder %||% "未知")
+      )
+      
+      return(summary_info)
+      
+    }, error = function(e) {
+      return(list(success = FALSE, error = e$message))
+    })
+  }
   
   # 加载量表配置
   observe({
@@ -1937,7 +2161,23 @@ server <- function(input, output, session) {
           values$upload_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
           values$output_folder <- file.path(getwd(), paste0("results_", values$upload_timestamp))
           
-          # 创建输出文件夹
+          # 初始化过程数据保存系统
+          tryCatch({
+            process_init <- initializeProcessDataSaver(values$output_folder, values$upload_timestamp)
+            if(process_init$success) {
+              values$folder_paths <- process_init$folder_paths
+              values$process_saver_enabled <- TRUE
+              cat("✅ 过程数据保存系统已初始化\n")
+            } else {
+              values$process_saver_enabled <- FALSE
+              cat("⚠️ 过程数据保存系统初始化失败，使用传统保存方式\n")
+            }
+          }, error = function(e) {
+            values$process_saver_enabled <- FALSE
+            cat("⚠️ 过程数据保存系统不可用:", e$message, "\n")
+          })
+          
+          # 创建输出文件夹（兼容原有逻辑）
           if(!dir.exists(values$output_folder)) {
             dir.create(values$output_folder, recursive = TRUE)
             cat("创建输出文件夹:", values$output_folder, "\n")
@@ -1945,6 +2185,37 @@ server <- function(input, output, session) {
           
           # 使用处理后的数据（已自动转换数值类型）
           values$processed_data <- values$validation_result$processed_data
+          
+          # 保存原始数据（如果过程数据保存系统可用）
+          if(values$process_saver_enabled && !is.null(values$folder_paths)) {
+            tryCatch({
+              saveRawData(
+                raw_data = values$raw_data,
+                file_info = list(
+                  name = input$file$name,
+                  size = input$file$size
+                ),
+                folder_paths = values$folder_paths,
+                timestamp = values$upload_timestamp
+              )
+            }, error = function(e) {
+              cat("⚠️ 原始数据保存失败:", e$message, "\n")
+            })
+          }
+          
+          # 保存预处理数据
+          if(values$process_saver_enabled && !is.null(values$folder_paths)) {
+            tryCatch({
+              saveProcessedData(
+                processed_data = values$processed_data,
+                validation_result = values$validation_result,
+                folder_paths = values$folder_paths,
+                timestamp = values$upload_timestamp
+              )
+            }, error = function(e) {
+              cat("⚠️ 预处理数据保存失败:", e$message, "\n")
+            })
+          }
           
           incProgress(0.7, detail = "检测可用量表...")
           
@@ -2237,6 +2508,20 @@ server <- function(input, output, session) {
           # 更新处理后的数据
           values$processed_data <- calculation_result$data
           values$calculated_scales <- calculation_result
+          
+          # 保存量表计算结果
+          if(values$process_saver_enabled && !is.null(values$folder_paths)) {
+            tryCatch({
+              saveScaleCalculation(
+                calculated_scales = calculation_result,
+                scale_reliability = NULL,  # 可以在后续添加可靠性分析
+                folder_paths = values$folder_paths,
+                timestamp = values$upload_timestamp
+              )
+            }, error = function(e) {
+              cat("⚠️ 量表计算结果保存失败:", e$message, "\n")
+            })
+          }
           
           incProgress(1, detail = "完成!")
           
@@ -2688,6 +2973,50 @@ server <- function(input, output, session) {
       HTML(report_html)
     } else {
       div(class = "alert alert-danger", values$calculated_scales$message)
+    }
+  })
+  
+  # 显示从状态导入的数据信息
+  output$imported_state_info <- renderUI({
+    req(values$processed_data)
+    
+    # 检查数据是否是通过状态导入的（没有经过常规上传流程的计算）
+    if(!is.null(values$calculated_scales) && !is.null(values$calculated_scales$summary)) {
+      # 显示已计算量表信息
+      scales_info <- values$calculated_scales$summary
+      n_scales <- length(scales_info)
+      
+      tagList(
+        div(
+          style = "background-color: #d1ecf1; padding: 15px; border-radius: 5px; border-left: 4px solid #17a2b8;",
+          h5("✅ 状态导入成功", style = "color: #0c5460; margin-bottom: 10px;"),
+          tags$p(paste0("已载入数据：", nrow(values$processed_data), " 个样本，", 
+                       ncol(values$processed_data), " 个变量"), 
+                style = "margin-bottom: 8px;"),
+          tags$p(paste0("已计算量表：", n_scales, " 个量表"), 
+                style = "margin-bottom: 8px;"),
+          tags$hr(style = "margin: 10px 0;"),
+          tags$p("✅ 数据已准备就绪，您可以：", style = "margin-bottom: 8px;"),
+          tags$ul(
+            tags$li("前往「变量选择」页面查看和调整变量配置"),
+            tags$li("或者直接前往「网络分析」页面开始分析"),
+            style = "margin-bottom: 0;"
+          )
+        )
+      )
+    } else {
+      # 显示数据基本信息（没有计算量表的情况）
+      tagList(
+        div(
+          style = "background-color: #fff3cd; padding: 15px; border-radius: 5px; border-left: 4px solid #ffc107;",
+          h5("📊 数据已导入", style = "color: #856404; margin-bottom: 10px;"),
+          tags$p(paste0("数据规模：", nrow(values$processed_data), " 个样本，", 
+                       ncol(values$processed_data), " 个变量"), 
+                style = "margin-bottom: 8px;"),
+          tags$p("💡 您可以重新检测和计算量表，或使用现有配置继续分析。", 
+                style = "margin-bottom: 0; font-style: italic;")
+        )
+      )
     }
   })
   
@@ -3751,6 +4080,26 @@ server <- function(input, output, session) {
           if(!is.null(values$code_recorder)) {
             cat("📝 代码记录器已更新，包含网络分析代码\n")
           }
+        }
+        
+        # 保存网络分析结果
+        if(values$process_saver_enabled && !is.null(values$folder_paths)) {
+          tryCatch({
+            saveNetworkAnalysis(
+              network_result = values$network_result,
+              centrality_result = values$centrality_result,
+              analysis_params = list(
+                n_variables = n_vars,
+                complete_cases = complete_cases,
+                analysis_level = values$analysis_level,
+                estimator = input$estimator
+              ),
+              folder_paths = values$folder_paths,
+              timestamp = values$upload_timestamp
+            )
+          }, error = function(e) {
+            cat("⚠️ 网络分析结果保存失败:", e$message, "\n")
+          })
         }
         
         incProgress(1, detail = "网络分析完成!")
@@ -5503,6 +5852,34 @@ server <- function(input, output, session) {
     },
     content = function(file) {
       tryCatch({
+        # 生成最终分析摘要报告
+        if(values$process_saver_enabled && !is.null(values$folder_paths)) {
+          tryCatch({
+            analysis_summary <- list(
+              raw_rows = ifelse(!is.null(values$raw_data), nrow(values$raw_data), NA),
+              raw_cols = ifelse(!is.null(values$raw_data), ncol(values$raw_data), NA),
+              processed_rows = ifelse(!is.null(values$processed_data), nrow(values$processed_data), NA),
+              processed_cols = ifelse(!is.null(values$processed_data), ncol(values$processed_data), NA),
+              complete_cases = ifelse(!is.null(values$validation_result), values$validation_result$statistics$complete_cases, NA),
+              complete_rate = ifelse(!is.null(values$validation_result), values$validation_result$statistics$complete_rate, NA),
+              n_scales = ifelse(!is.null(values$calculated_scales), length(values$calculated_scales$summary), NA),
+              analysis_level = values$analysis_level %||% "未知",
+              n_variables = ifelse(!is.null(values$final_variables), length(values$final_variables), NA),
+              n_groups = ifelse(!is.null(values$variable_groups), length(unique(values$variable_groups)), NA),
+              network_completed = !is.null(values$network_result),
+              stability_completed = !is.null(values$stability_result),
+              bayesian_completed = !is.null(values$bayesian_result),
+              comparison_completed = !is.null(values$group_compare_result),
+              bridge_completed = !is.null(values$bridge_result),
+              temperature_completed = FALSE  # 可根据实际情况设置
+            )
+            
+            generateAnalysisSummary(values$folder_paths, values$upload_timestamp, analysis_summary)
+          }, error = function(e) {
+            cat("⚠️ 分析摘要报告生成失败:", e$message, "\n")
+          })
+        }
+        
         if(!is.null(values$output_folder) && dir.exists(values$output_folder)) {
           # 获取输出文件夹中的所有文件
           files_to_zip <- list.files(values$output_folder, full.names = TRUE, recursive = TRUE)
@@ -6121,6 +6498,245 @@ server <- function(input, output, session) {
     } else {
       return("⚠️ 暂无可用变量，请先上传数据并完成变量构造")
     }
+  })
+  
+  # 频数分布显示
+  output$frequency_distribution_display <- renderUI({
+    # 检查是否有已计算的量表结果和处理过的数据
+    if(!is.null(values$calculated_scales) && !is.null(values$calculated_scales$summary) && 
+       length(values$calculated_scales$summary) > 0 && !is.null(values$processed_data)) {
+      
+      # 定义总分变量模式（保持一致性）
+      total_patterns <- c("_Total$", "_mean$", "_sum$", "_weighted$", "_max$", "_cfa$", "_pca$", "_factor$", "_std$")
+      
+      scales_info <- values$calculated_scales$summary
+      final_variables <- character(0)
+      
+      # 构建最终变量列表（与final_variables_preview保持一致的逻辑）
+      for(scale_name in names(scales_info)) {
+        scale_info <- scales_info[[scale_name]]
+        level_input_id <- paste0("advanced_level_", scale_name)
+        selected_level <- input[[level_input_id]]
+        
+        if(is.null(selected_level)) selected_level <- "summary"
+        
+        is_manual <- !is.null(scale_info$is_manual) && scale_info$is_manual
+        
+        if(selected_level == "summary") {
+          if(is_manual) {
+            final_variables <- c(final_variables, scale_info$new_variables)
+          } else {
+            # 对于预配置量表，显示总分变量
+            total_vars_names <- scale_info$new_variables[sapply(scale_info$new_variables, function(x) any(sapply(total_patterns, function(p) grepl(p, x))))]
+            if(length(total_vars_names) > 0) {
+              final_variables <- c(final_variables, total_vars_names[1])
+            } else {
+              final_variables <- c(final_variables, scale_info$new_variables[1])
+            }
+          }
+          
+        } else if(selected_level == "subscale") {
+          # 子量表层：显示非总分变量
+          subscale_vars <- scale_info$new_variables[!sapply(scale_info$new_variables, function(x) any(sapply(total_patterns, function(p) grepl(p, x))))]
+          final_variables <- c(final_variables, subscale_vars)
+          
+        } else if(selected_level == "items") {
+          # 条目层：显示原始条目
+          if(!is.null(values$calculated_scales$available_scales) && 
+             scale_name %in% names(values$calculated_scales$available_scales)) {
+            available_scale_info <- values$calculated_scales$available_scales[[scale_name]]
+            if(!is.null(available_scale_info$existing_items)) {
+              final_variables <- c(final_variables, available_scale_info$existing_items)
+            }
+          }
+        }
+      }
+      
+      # 计算频数分布
+      if(length(final_variables) > 0) {
+        freq_results <- calculate_frequency_distribution(values$processed_data, final_variables, show_missing = TRUE)
+        
+        if(!is.null(freq_results) && length(freq_results) > 0) {
+          # 生成HTML显示
+          freq_html <- generate_frequency_display_html(freq_results)
+          return(HTML(freq_html))
+        } else {
+          return(tags$p("暂无频数分布数据", style = "color: #666;"))
+        }
+      } else {
+        return(tags$p("请先选择变量", style = "color: #666;"))
+      }
+    } else {
+      return(tags$p("请先上传数据并选择变量", style = "color: #666;"))
+    }
+  })
+  
+  # =============================================================================
+  # 状态保存和读取事件处理
+  # =============================================================================
+  
+  # 保存应用状态
+  observeEvent(input$save_app_state, {
+    tryCatch({
+      # 检查是否有数据可以保存
+      if(is.null(values$processed_data) && is.null(values$raw_data)) {
+        showNotification("没有数据可以保存，请先上传数据", type = "warning")
+        return()
+      }
+      
+      # 确保有输出文件夹
+      if(is.null(values$output_folder)) {
+        # 如果没有输出文件夹，创建一个
+        current_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+        values$upload_timestamp <- current_timestamp
+        values$output_folder <- file.path(getwd(), paste0("results_", current_timestamp))
+        if(!dir.exists(values$output_folder)) {
+          dir.create(values$output_folder, recursive = TRUE)
+          cat("创建输出文件夹:", values$output_folder, "\n")
+        }
+      }
+      
+      # 生成文件名（带时间戳）
+      state_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+      filename <- paste0("NetworkApp_State_", state_timestamp, ".rds")
+      
+      # 创建保存状态
+      app_state <- saveAppState()
+      
+      # 保存到results文件夹中
+      full_path <- file.path(values$output_folder, filename)
+      saveRDS(app_state, full_path)
+      cat("状态已保存到文件:", full_path, "\n")
+      
+      showNotification(
+        paste0("状态已保存至：", basename(values$output_folder), "/", filename), 
+        type = "message", 
+        duration = 5
+      )
+      
+      # 显示保存摘要
+      summary_text <- paste0(
+        "✅ 状态保存摘要\n",
+        "保存时间：", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n",
+        "保存位置：", basename(values$output_folder), "/", filename, "\n",
+        if(!is.null(values$processed_data)) 
+          paste0("数据规模：", nrow(values$processed_data), "行×", ncol(values$processed_data), "列\n") 
+        else "",
+        if(!is.null(values$calculated_scales)) 
+          paste0("已计算量表：", length(values$calculated_scales$summary), "个\n")
+        else "",
+        if(!is.null(values$variables_confirmed) && values$variables_confirmed)
+          paste0("变量状态：已确认选择\n")
+        else "变量状态：未确认\n"
+      )
+      
+      showModal(modalDialog(
+        title = "状态保存成功",
+        tags$pre(summary_text),
+        easyClose = TRUE,
+        footer = modalButton("确定")
+      ))
+      
+    }, error = function(e) {
+      showNotification(paste("保存状态失败:", e$message), type = "error")
+    })
+  })
+  
+  # 读取应用状态（变量选择页面）
+  observeEvent(input$load_app_state, {
+    req(input$load_app_state)
+    
+    tryCatch({
+      # 读取RDS文件
+      state_data <- readRDS(input$load_app_state$datapath)
+      
+      # 加载状态
+      load_result <- loadAppState(state_data)
+      
+      if(load_result$success) {
+        # 显示加载成功信息
+        summary_text <- paste0(
+          "✅ 状态加载成功\n",
+          "保存时间：", load_result$save_time, "\n",
+          "应用版本：", load_result$app_version, "\n",
+          "数据规模：", load_result$data_info, "\n",
+          "\n📝 注意：网络分析结果已清空，需要重新运行分析"
+        )
+        
+        showModal(modalDialog(
+          title = "状态加载成功",
+          tags$pre(summary_text),
+          easyClose = TRUE,
+          footer = modalButton("确定")
+        ))
+        
+        showNotification("应用状态已成功加载", type = "message", duration = 3)
+        
+      } else {
+        showNotification(paste("加载状态失败:", load_result$error), type = "error")
+      }
+      
+    }, error = function(e) {
+      showNotification(paste("读取RDS文件失败:", e$message), type = "error")
+    })
+  })
+  
+  # 读取应用状态（变量构造页面）
+  observeEvent(input$load_state_construct, {
+    req(input$load_state_construct)
+    
+    tryCatch({
+      # 读取RDS文件
+      state_data <- readRDS(input$load_state_construct$datapath)
+      
+      # 加载状态
+      load_result <- loadAppState(state_data)
+      
+      if(load_result$success) {
+        # 显示加载成功信息，引导用户到下一步
+        summary_text <- paste0(
+          "✅ 状态导入成功\n",
+          "保存时间：", load_result$save_time, "\n",
+          "应用版本：", load_result$app_version, "\n",
+          "数据规模：", load_result$data_info, "\n",
+          "\n🎯 接下来您可以：\n",
+          "• 前往「变量选择」页面查看/调整变量配置\n",
+          "• 或直接前往「网络分析」页面开始分析"
+        )
+        
+        showModal(modalDialog(
+          title = "状态导入成功 - 快速开始模式",
+          tags$pre(summary_text),
+          easyClose = TRUE,
+          footer = tagList(
+            actionButton("goto_variables_page", "📝 变量选择", class = "btn-primary"),
+            actionButton("goto_analysis_page", "📊 网络分析", class = "btn-success"),
+            modalButton("稍后")
+          )
+        ))
+        
+        showNotification("✅ 分析状态已成功导入，可直接开始分析", type = "message", duration = 5)
+        
+      } else {
+        showNotification(paste("导入状态失败:", load_result$error), type = "error")
+      }
+      
+    }, error = function(e) {
+      showNotification(paste("读取RDS文件失败:", e$message), type = "error")
+    })
+  })
+  
+  # 页面跳转事件处理（从状态导入对话框）
+  observeEvent(input$goto_variables_page, {
+    updateTabItems(session, "sidebar", "variables")
+    removeModal()
+    showNotification("已跳转到变量选择页面，您可以查看和调整变量配置", type = "message", duration = 3)
+  })
+  
+  observeEvent(input$goto_analysis_page, {
+    updateTabItems(session, "sidebar", "analysis")  
+    removeModal()
+    showNotification("已跳转到网络分析页面，可以直接开始分析", type = "message", duration = 3)
   })
   
   # 确认变量选择

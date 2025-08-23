@@ -606,10 +606,73 @@ safe_network_analysis <- function(data, threshold = 0.05, edge_labels = TRUE, co
   if(!is.null(shape)) args$shape <- shape
   if(!is.null(title)) args$title <- title
   if(!is.null(layout)) args$layout <- layout
-  args <- c(args, list(...))
+  
+  # 处理估计方法参数
+  dots <- list(...)
+  if("estimator" %in% names(dots)) {
+    estimator <- dots$estimator
+    if(estimator == "mgm") {
+      # MGM特殊处理：调整参数以提高边选择敏感性
+      args$method <- "mgm"
+      args$gamma <- 0.0  # 降低gamma以提高敏感性
+      cat("🔧 使用MGM方法，调整参数以提高边检测敏感性\n")
+    } else if(estimator == "EBICglasso") {
+      # EBICglasso是默认方法
+      args$method <- "EBICglasso"
+    } else {
+      args$method <- estimator
+    }
+    # 移除estimator参数，避免传递给quickNet
+    dots$estimator <- NULL
+  }
+  
+  args <- c(args, dots)
   
   # 调用quickNet
-  network_result <- do.call(quickNet::quickNet, args)
+  tryCatch({
+    network_result <- do.call(quickNet::quickNet, args)
+    
+    # 检查是否获得了空网络
+    if(!is.null(network_result) && 
+       is.list(network_result) && 
+       !is.null(network_result$graph) && 
+       !is.null(network_result$graph$adjacency)) {
+      
+      # 计算网络边数
+      adj_matrix <- network_result$graph$adjacency
+      n_edges <- sum(adj_matrix != 0) / 2  # 无向网络，除以2
+      
+      if(n_edges == 0) {
+        cat("⚠️ 警告：检测到空网络（无边），这可能导致后续分析问题\n")
+        cat("建议：\n")
+        cat("  - 降低阈值参数 (threshold < 0.05)\n")
+        cat("  - 检查数据相关性是否过低\n") 
+        cat("  - 考虑增加样本量\n")
+        if("method" %in% names(args) && args$method == "mgm") {
+          cat("  - 对于MGM方法，可以尝试调整gamma参数\n")
+        }
+      } else {
+        cat("✅ 网络构建成功，包含", n_edges, "条边\n")
+      }
+    }
+    
+    return(network_result)
+    
+  }, error = function(e) {
+    cat("❌ 网络分析失败:", e$message, "\n")
+    
+    # 为MGM提供更具体的错误处理建议
+    if("method" %in% names(args) && args$method == "mgm") {
+      cat("MGM分析失败可能的原因：\n")
+      cat("  - 数据包含无穷值或缺失值\n")
+      cat("  - 数据类型不符合MGM要求\n")
+      cat("  - 样本量相对于变量数过小\n")
+      cat("  - 尝试切换到EBICglasso方法\n")
+    }
+    
+    # 重新抛出原始错误
+    stop(e$message)
+  })
   return(network_result)
 }
 
@@ -2774,9 +2837,14 @@ generate_temperature_summary <- function(metrics, comparison, group_var) {
 ########################## 代码生成和导出功能 ############################## 
 ################################################################################
 
-# 初始化代码记录器
+# 初始化代码记录器 - 按执行顺序记录
 init_code_recorder <- function() {
   list(
+    # 主要代码记录 - 按时间顺序
+    execution_steps = list(),  # 新增：按执行顺序记录的步骤
+    step_counter = 0,          # 新增：步骤计数器
+    
+    # 传统分类记录 - 保留向后兼容
     data_loading = c(),
     data_preprocessing = c(),
     network_analysis = c(),
@@ -2791,21 +2859,34 @@ init_code_recorder <- function() {
   )
 }
 
-# 添加代码记录
+# 添加代码记录 - 同时记录到分类和执行步骤
 add_code_record <- function(recorder, section, code_lines, description = "") {
   if(is.null(recorder)) recorder <- init_code_recorder()
   
   # 添加时间戳和描述
+  timestamp <- format(Sys.time(), "%H:%M:%S")
   if(description != "") {
-    code_lines <- c(paste0("# ", description, " [", format(Sys.time(), "%H:%M:%S"), "]"), code_lines)
+    header_line <- paste0("# ", description, " [", timestamp, "]")
+    code_lines <- c(header_line, code_lines)
   }
   
-  # 如果section不存在，创建它；如果存在，追加代码
+  # 传统分类记录（保留向后兼容）
   if(section %in% names(recorder)) {
     recorder[[section]] <- c(recorder[[section]], "", code_lines)
   } else {
     recorder[[section]] <- code_lines
   }
+  
+  # 新增：按执行顺序记录步骤
+  recorder$step_counter <- recorder$step_counter + 1
+  step_info <- list(
+    step_number = recorder$step_counter,
+    timestamp = Sys.time(),
+    section = section,
+    description = description,
+    code = code_lines
+  )
+  recorder$execution_steps[[recorder$step_counter]] <- step_info
   
   return(recorder)
 }
@@ -2916,12 +2997,11 @@ record_actual_code <- function(recorder, code_lines, section_name, description =
     recorder <- init_code_recorder()
   }
   
-  # 添加时间戳
-  timestamp_line <- paste("# [", Sys.time(), "]", description %||% section_name)
-  code_lines <- c(timestamp_line, code_lines, "")
+  # 确保描述不为空
+  final_description <- description %||% section_name
   
-  # 返回更新后的recorder
-  return(add_code_record(recorder, section_name, code_lines, description %||% section_name))
+  # 直接使用add_code_record，避免重复添加时间戳
+  return(add_code_record(recorder, section_name, code_lines, final_description))
 }
 
 # 记录网络分析代码
@@ -3242,19 +3322,187 @@ record_exports <- function(recorder, final_variables) {
   add_code_record(recorder, "exports", code_lines, "结果导出阶段")
 }
 
-# 生成完整R脚本
+# 生成完整R脚本 - 按用户实际执行步骤顺序
+# 确保数据定义的完整性
+ensure_data_definition <- function(code_lines) {
+  # 检查是否包含数据加载和定义
+  has_data_loading <- any(grepl("read|readxl|raw_data", code_lines))
+  has_analysis_data_def <- any(grepl("analysis_data\\s*<-", code_lines))
+  
+  if(!has_data_loading) {
+    # 添加数据加载提醒
+    data_loading_reminder <- c(
+      "# 请在此处添加数据加载代码",
+      "# raw_data <- readxl::read_excel('your_data_file.xlsx')",
+      ""
+    )
+    code_lines <- c(data_loading_reminder, code_lines)
+  }
+  
+  if(!has_analysis_data_def && any(grepl("analysis_vars", code_lines))) {
+    # 在 analysis_vars 定义后添加 analysis_data 定义
+    var_line_idx <- which(grepl("analysis_vars", code_lines))[1]
+    if(!is.na(var_line_idx)) {
+      data_def_lines <- c(
+        "",
+        "analysis_data <- raw_data[, analysis_vars]",
+        ""
+      )
+      # 在变量定义后插入数据定义
+      code_lines <- c(
+        code_lines[1:var_line_idx],
+        data_def_lines,
+        code_lines[(var_line_idx + 1):length(code_lines)]
+      )
+    }
+  }
+  
+  # 特殊处理：修正 analysis_data 的循环引用问题
+  # 例如：analysis_data <- analysis_data[complete.cases(analysis_data), ]
+  problematic_lines <- grep("analysis_data\\s*<-\\s*analysis_data\\[", code_lines)
+  if(length(problematic_lines) > 0 && any(grepl("analysis_vars", code_lines))) {
+    for(line_idx in problematic_lines) {
+      # 在这个问题行之前插入正确的数据定义
+      if(line_idx > 1) {
+        # 查找前面是否已经有数据定义
+        previous_lines <- code_lines[1:(line_idx-1)]
+        if(!any(grepl("analysis_data\\s*<-\\s*raw_data", previous_lines))) {
+          # 在问题行之前插入正确的定义
+          code_lines <- c(
+            code_lines[1:(line_idx-1)],
+            "analysis_data <- raw_data[, analysis_vars]",
+            "",
+            code_lines[line_idx:length(code_lines)]
+          )
+          break  # 只插入一次
+        }
+      }
+    }
+  }
+  
+  # 如果仍然有 analysis_data 使用但没有定义，进行替换修正
+  uses_analysis_data <- any(grepl("analysis_data\\[", code_lines))
+  still_no_def <- !any(grepl("analysis_data\\s*<-\\s*raw_data", code_lines))  # 查找正确的定义
+  
+  if(uses_analysis_data && still_no_def && any(grepl("analysis_vars", code_lines))) {
+    # 查找第一个使用 analysis_data 的地方，在之前插入定义
+    first_use_idx <- which(grepl("analysis_data\\[", code_lines))[1]
+    if(!is.na(first_use_idx)) {
+      # 在第一次使用前插入定义
+      code_lines <- c(
+        code_lines[1:(first_use_idx-1)],
+        "analysis_data <- raw_data[, analysis_vars]",
+        "",
+        code_lines[first_use_idx:length(code_lines)]
+      )
+    }
+  }
+  
+  return(code_lines)
+}
+
 generate_complete_script <- function(recorder, output_path = NULL) {
   if(is.null(recorder)) return(NULL)
   
+  # 检测分析类型
+  analysis_type <- detect_analysis_type(recorder)
+  
   # 脚本头部
-  header_lines <- c(
+  header_lines <- generate_script_header(analysis_type)
+  
+  # 组合所有代码部分
+  all_lines <- c(header_lines)
+  
+  # 优先使用execution_steps（按实际执行顺序）
+  if(!is.null(recorder$execution_steps) && length(recorder$execution_steps) > 0) {
+    cat("📋 使用实际执行步骤生成脚本，共", length(recorder$execution_steps), "个步骤\n")
+    
+    # 跟踪已添加的代码段，避免重复
+    added_sections <- list()
+    
+    for(i in seq_along(recorder$execution_steps)) {
+      step <- recorder$execution_steps[[i]]
+      
+      # 生成步骤唯一标识符
+      step_id <- paste0(step$section, "_", step$description)
+      
+      # 跳过重复的步骤（例如重复的中心性分析）
+      if(step_id %in% names(added_sections)) {
+        cat("⚠️ 跳过重复步骤:", step$description, "\n")
+        next
+      }
+      
+      # 添加步骤分隔符
+      step_header <- paste0("\n# ======== 步骤 ", i, ": ", step$description, " ========")
+      step_timestamp <- paste0("# 执行时间: ", format(step$timestamp, "%Y-%m-%d %H:%M:%S"))
+      
+      all_lines <- c(all_lines, "", step_header, step_timestamp, "")
+      
+      # 添加实际代码
+      if(length(step$code) > 0) {
+        # 过滤掉重复的时间戳行和空行
+        clean_code <- step$code[!grepl("^# .* \\[\\d{2}:\\d{2}:\\d{2}\\]", step$code)]
+        clean_code <- clean_code[nzchar(clean_code)]  # 移除空行
+        
+        # 特殊处理：确保数据定义的完整性
+        if(step$section == "data_preprocessing" && any(grepl("analysis_vars", clean_code))) {
+          # 确保包含完整的数据定义
+          clean_code <- ensure_data_definition(clean_code)
+        }
+        
+        all_lines <- c(all_lines, clean_code, "")
+      }
+      
+      # 记录已添加的步骤
+      added_sections[[step_id]] <- TRUE
+    }
+  } else {
+    # 降级到传统分类方式（向后兼容）
+    cat("⚠️ 未找到执行步骤记录，使用传统分类方式生成脚本\n")
+    all_lines <- c(all_lines, generate_legacy_script_body(recorder))
+  }
+  
+  # 添加脚本尾部
+  footer_lines <- generate_script_footer(analysis_type)
+  all_lines <- c(all_lines, footer_lines)
+  
+  # 保存或返回
+  if(!is.null(output_path)) {
+    writeLines(all_lines, output_path, useBytes = TRUE)
+    cat("📝 脚本已保存到:", output_path, "\n")
+    return(output_path)
+  } else {
+    return(paste(all_lines, collapse = "\n"))
+  }
+}
+
+# 检测分析类型
+detect_analysis_type <- function(recorder) {
+  if(is.null(recorder)) return("网络分析")
+  
+  # 检查不同类型的分析
+  if(!is.null(recorder$temperature_analysis) && length(recorder$temperature_analysis) > 0) {
+    return("网络温度分析")
+  } else if(!is.null(recorder$bayesian_analysis) && length(recorder$bayesian_analysis) > 0) {
+    return("贝叶斯网络分析")
+  } else if(!is.null(recorder$bridge_analysis) && length(recorder$bridge_analysis) > 0) {
+    return("桥接网络分析")
+  } else {
+    return("心理量表网络分析")
+  }
+}
+
+# 生成脚本头部
+generate_script_header <- function(analysis_type) {
+  c(
     "################################################################################",
-    "##                    心理量表网络温度分析脚本                      ##",
-    "##                 Psychology Network Temperature Analysis                    ##",
+    paste0("##                    ", analysis_type, "脚本                           ##"),
+    paste0("##                 Psychology Network Analysis Script                    ##"),
     "################################################################################",
     "##", 
     paste0("## 生成时间 Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
     "## 由NetworkApp自动生成 Auto-generated by NetworkApp",
+    "## 此脚本按用户实际执行步骤顺序生成 Generated following actual execution order",
     "##",
     "## 使用说明 Instructions:", 
     "## 1. 确保安装所需R包 Install required packages",
@@ -3271,7 +3519,7 @@ generate_complete_script <- function(recorder, output_path = NULL) {
     "# setwd('/path/to/your/working/directory')",
     "",
     "# 检查并安装所需包 Check and install required packages",
-    "required_packages <- c('readxl', 'dplyr', 'psychonetrics', 'ggplot2', 'viridis', 'IsingSampler', 'igraph')",
+    "required_packages <- c('readxl', 'dplyr', 'quickNet', 'bootnet', 'qgraph', 'ggplot2')",
     "for(pkg in required_packages) {",
     "  if(!require(pkg, character.only = TRUE)) {",
     "    install.packages(pkg)",
@@ -3280,15 +3528,28 @@ generate_complete_script <- function(recorder, output_path = NULL) {
     "}",
     "",
     "# 特殊包安装 Special packages installation",
-    "# if(!require(IsingSampler)) devtools::install_github('SachaEpskamp/IsingSampler')",
-    "# if(!require(psychonetrics)) install.packages('psychonetrics')",
+    "# if(!require(quickNet)) devtools::install_github('LeiGuo0812/quickNet')",
     ""
   )
-  
-  # 组合所有代码部分
-  all_lines <- c(header_lines)
-  
-  # 动态获取所有实际记录的sections，按逻辑顺序排列
+}
+
+# 生成脚本尾部
+generate_script_footer <- function(analysis_type) {
+  c(
+    "",
+    "################################################################################",
+    "##                              脚本结束                                ##",
+    "##                           Script Complete                               ##",
+    "################################################################################",
+    "",
+    "# 显示完成信息",
+    paste0('cat("\\n=== ', analysis_type, '完成 Analysis Complete ===\\n")'),
+    'cat("\\n请检查生成的文件 Please check the generated files.\\n")'
+  )
+}
+
+# 传统分类方式生成脚本主体（向后兼容）
+generate_legacy_script_body <- function(recorder) {
   all_sections <- names(recorder)
   
   # 定义sections的逻辑顺序
@@ -3309,46 +3570,48 @@ generate_complete_script <- function(recorder, output_path = NULL) {
     "exports"
   )
   
+  script_lines <- c()
+  added_content <- list()  # 跟踪已添加的内容，避免重复
+  
   # 按顺序处理已存在的sections
   for(section in section_order) {
     if(section %in% all_sections && length(recorder[[section]]) > 0) {
-      all_lines <- c(all_lines, recorder[[section]], "")
+      section_code <- recorder[[section]]
+      
+      # 去除重复的时间戳和空行
+      clean_code <- section_code[!grepl("^# .* \\[\\d{2}:\\d{2}:\\d{2}\\]", section_code)]
+      clean_code <- clean_code[nzchar(clean_code)]
+      
+      # 检查内容是否已添加（基于代码内容的哈希）
+      code_content <- paste(clean_code, collapse = "\n")
+      # 使用简单的字符串哈希，避免依赖digest包
+      content_hash <- paste0(section, "_", nchar(code_content), "_", substr(code_content, 1, 50))
+      
+      if(!content_hash %in% names(added_content)) {
+        # 确保数据定义的完整性
+        if(section == "data_preprocessing") {
+          clean_code <- ensure_data_definition(clean_code)
+        }
+        
+        script_lines <- c(script_lines, 
+                         paste0("\n# ", toupper(gsub("_", " ", section)), " 阶段"),
+                         clean_code, "")
+        added_content[[content_hash]] <- section
+      } else {
+        cat("⚠️ 跳过重复的", section, "内容\n")
+      }
     }
   }
   
   # 处理不在预定义顺序中的其他sections，但排除内部sections
-  remaining_sections <- setdiff(all_sections, c(section_order, "parameters", "session_info"))
+  remaining_sections <- setdiff(all_sections, c(section_order, "parameters", "session_info", "execution_steps", "step_counter"))
   for(section in remaining_sections) {
     if(length(recorder[[section]]) > 0) {
-      all_lines <- c(all_lines, recorder[[section]], "")
+      script_lines <- c(script_lines, recorder[[section]], "")
     }
   }
   
-  # 添加脚本尾部
-  footer_lines <- c(
-    "################################################################################",
-    "##                              脚本结束                                ##",
-    "##                           Script Complete                               ##",
-    "################################################################################",
-    "",
-    "# 显示完成信息",
-    'cat("\\n=== 网络温度分析完成 Network Temperature Analysis Complete ===\\n")',
-    'cat("\\n生成文件 Generated files:\\n")',
-    'cat("- Fig4a_temperature_comparison.pdf\\n")',
-    'cat("- Fig4b_temperature_heatmap.pdf\\n")', 
-    'cat("- Fig4_temperature_network_metrics.csv\\n")',
-    'cat("\\n请检查结果文件 Please check the result files.\\n")'
-  )
-  
-  all_lines <- c(all_lines, footer_lines)
-  
-  # 保存或返回
-  if(!is.null(output_path)) {
-    writeLines(all_lines, output_path, useBytes = TRUE)
-    return(output_path)
-  } else {
-    return(paste(all_lines, collapse = "\n"))
-  }
+  return(script_lines)
 }
 
 # =============================================================================
@@ -4033,4 +4296,176 @@ test_powerly_package <- function() {
     cat("- Powerly测试失败:", e$message, "\n")
     return(paste("测试失败:", e$message))
   })
+}
+
+#' 计算变量频数分布
+#' @param data 数据框
+#' @param variables 变量名向量
+#' @param show_missing 是否显示缺失值统计
+#' @return 包含频数分布信息的列表
+calculate_frequency_distribution <- function(data, variables, show_missing = TRUE) {
+  if(is.null(data) || is.null(variables) || length(variables) == 0) {
+    return(NULL)
+  }
+  
+  # 确保变量存在于数据中
+  existing_vars <- variables[variables %in% names(data)]
+  if(length(existing_vars) == 0) {
+    return(NULL)
+  }
+  
+  freq_results <- list()
+  
+  for(var in existing_vars) {
+    var_data <- data[[var]]
+    
+    # 跳过完全缺失的变量
+    if(all(is.na(var_data))) {
+      freq_results[[var]] <- list(
+        type = "全缺失",
+        frequencies = data.frame(value = "NA", count = length(var_data), percent = 100.0, warning = TRUE),
+        total_count = length(var_data),
+        missing_count = length(var_data),
+        valid_count = 0
+      )
+      next
+    }
+    
+    # 移除缺失值计算频数
+    valid_data <- var_data[!is.na(var_data)]
+    missing_count <- sum(is.na(var_data))
+    total_count <- length(var_data)
+    valid_count <- length(valid_data)
+    
+    # 计算频数表
+    freq_table <- table(valid_data, useNA = "no")
+    freq_df <- data.frame(
+      value = names(freq_table),
+      count = as.numeric(freq_table),
+      stringsAsFactors = FALSE
+    )
+    
+    # 计算百分比
+    freq_df$percent <- round((freq_df$count / valid_count) * 100, 1)
+    
+    # 标记警告（占比<5%）
+    freq_df$warning <- freq_df$percent < 5.0
+    
+    # 如果需要显示缺失值且存在缺失值
+    if(show_missing && missing_count > 0) {
+      missing_row <- data.frame(
+        value = "缺失值",
+        count = missing_count,
+        percent = round((missing_count / total_count) * 100, 1),
+        warning = missing_count > 0,
+        stringsAsFactors = FALSE
+      )
+      freq_df <- rbind(freq_df, missing_row)
+    }
+    
+    # 按频数降序排序
+    freq_df <- freq_df[order(-freq_df$count), ]
+    
+    # 判断变量类型
+    var_type <- if(all(valid_data %in% c(0, 1))) {
+      "二元变量"
+    } else if(is.numeric(valid_data) && length(unique(valid_data)) <= 10) {
+      "分类变量"
+    } else if(is.numeric(valid_data)) {
+      "连续变量"
+    } else {
+      "其他类型"
+    }
+    
+    freq_results[[var]] <- list(
+      type = var_type,
+      frequencies = freq_df,
+      total_count = total_count,
+      missing_count = missing_count,
+      valid_count = valid_count
+    )
+  }
+  
+  return(freq_results)
+}
+
+#' 生成频数分布的HTML显示
+#' @param freq_results 频数分布计算结果
+#' @return HTML字符串
+generate_frequency_display_html <- function(freq_results) {
+  if(is.null(freq_results) || length(freq_results) == 0) {
+    return("<p style='color: #666;'>暂无频数分布信息</p>")
+  }
+  
+  html_parts <- c()
+  
+  for(var_name in names(freq_results)) {
+    freq_info <- freq_results[[var_name]]
+    
+    # 变量标题
+    html_parts <- c(html_parts, paste0(
+      "<div style='margin-bottom: 15px; border: 1px solid #ddd; padding: 10px; border-radius: 5px;'>",
+      "<h5 style='margin: 0 0 10px 0; color: #2c3e50;'>",
+      "<strong>", var_name, "</strong> (", freq_info$type, ")",
+      "</h5>"
+    ))
+    
+    # 样本量信息
+    html_parts <- c(html_parts, paste0(
+      "<p style='margin: 5px 0; font-size: 12px; color: #7f8c8d;'>",
+      "总样本: ", freq_info$total_count, 
+      " | 有效: ", freq_info$valid_count,
+      if(freq_info$missing_count > 0) paste0(" | 缺失: ", freq_info$missing_count) else "",
+      "</p>"
+    ))
+    
+    # 频数表
+    if(nrow(freq_info$frequencies) > 0) {
+      html_parts <- c(html_parts, "<table style='width: 100%; border-collapse: collapse; font-size: 12px;'>")
+      html_parts <- c(html_parts, "<tr style='background-color: #f8f9fa;'>")
+      html_parts <- c(html_parts, "<th style='border: 1px solid #dee2e6; padding: 5px; text-align: left;'>取值</th>")
+      html_parts <- c(html_parts, "<th style='border: 1px solid #dee2e6; padding: 5px; text-align: right;'>频数</th>")
+      html_parts <- c(html_parts, "<th style='border: 1px solid #dee2e6; padding: 5px; text-align: right;'>百分比</th>")
+      html_parts <- c(html_parts, "</tr>")
+      
+      for(i in 1:nrow(freq_info$frequencies)) {
+        row <- freq_info$frequencies[i, ]
+        
+        # 设置行样式（警告行用红色背景）
+        row_style <- if(row$warning) {
+          "background-color: #ffebee; color: #c62828;"
+        } else {
+          "background-color: white;"
+        }
+        
+        html_parts <- c(html_parts, paste0(
+          "<tr style='", row_style, "'>",
+          "<td style='border: 1px solid #dee2e6; padding: 5px;'>", row$value, "</td>",
+          "<td style='border: 1px solid #dee2e6; padding: 5px; text-align: right;'>", row$count, "</td>",
+          "<td style='border: 1px solid #dee2e6; padding: 5px; text-align: right;'>", row$percent, "%</td>",
+          "</tr>"
+        ))
+      }
+      
+      html_parts <- c(html_parts, "</table>")
+      
+      # 警告提示
+      warning_rows <- freq_info$frequencies[freq_info$frequencies$warning, ]
+      if(nrow(warning_rows) > 0 && any(warning_rows$value != "缺失值")) {
+        warning_values <- warning_rows$value[warning_rows$value != "缺失值"]
+        if(length(warning_values) > 0) {
+          html_parts <- c(html_parts, paste0(
+            "<p style='margin: 8px 0 0 0; font-size: 11px; color: #d32f2f;'>",
+            "<i class='fa fa-exclamation-triangle'></i> ",
+            "⚠️ 以下类别占比<5%: ", paste(warning_values, collapse = ", "),
+            "</p>"
+          ))
+        }
+      }
+    }
+    
+    html_parts <- c(html_parts, "</div>")
+  }
+  
+  return(paste(html_parts, collapse = "\n"))
 }

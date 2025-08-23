@@ -170,6 +170,7 @@ calculate_single_scale <- function(data, scale_config) {
   min_valid_items <- scale_config$min_valid_items
   calculation_method <- scale_config$calculation_method
   subscales_definition <- scale_config$subscales_definition
+  special_logic <- scale_config$special_logic  # 添加特殊逻辑字段
   
   # 解析题目编号
   item_numbers <- parse_item_numbers(item_numbers_str)
@@ -196,6 +197,13 @@ calculate_single_scale <- function(data, scale_config) {
     }
   }
   
+  # 🔥 处理特殊逻辑（重要：在反向计分后、总分计算前）
+  if (!is.na(special_logic) && special_logic != "") {
+    result_data <- apply_special_logic_calculator(result_data, scale_name, item_prefix, item_numbers, special_logic)
+    # 重新提取处理后的数据（特殊逻辑可能修改了原始题目数据）
+    scale_data <- result_data[, existing_items, drop = FALSE]
+  }
+  
   # 计算有效题目数
   valid_count <- rowSums(!is.na(scale_data))
   
@@ -211,55 +219,72 @@ calculate_single_scale <- function(data, scale_config) {
     result_data[[total_score_name]] <- ifelse(valid_count >= min_valid_items,
                                              rowMeans(scale_data, na.rm = TRUE),
                                              NA)
+    new_variables <- c(new_variables, total_score_name)
   } else if (calculation_method == "sum") {
     total_score_name <- paste0(scale_name, "_sum")
     # 求和计算  
     result_data[[total_score_name]] <- ifelse(valid_count >= min_valid_items,
                                              rowSums(scale_data, na.rm = TRUE),
                                              NA)
+    new_variables <- c(new_variables, total_score_name)
   } else if (calculation_method == "weighted_mean") {
     total_score_name <- paste0(scale_name, "_weighted")
     # 加权平均
     result_data[[total_score_name]] <- ifelse(valid_count >= min_valid_items,
                                              rowMeans(scale_data, na.rm = TRUE),
                                              NA)
+    new_variables <- c(new_variables, total_score_name)
   } else if (calculation_method == "threshold") {
     total_score_name <- paste0(scale_name, "_threshold")
     # 阈值计算（用于诊断量表）
     result_data[[total_score_name]] <- calculate_threshold_score(scale_data, subscales_definition)
+    new_variables <- c(new_variables, total_score_name)
+  } else if (calculation_method == "special") {
+    # 🔥 特殊计算方法：总分已由特殊逻辑函数处理，检查是否存在
+    total_score_name <- paste0(scale_name, "_Total")
+    if (total_score_name %in% names(result_data)) {
+      new_variables <- c(new_variables, total_score_name)
+    }
+    # 检查其他可能的特殊变量（如诊断变量）
+    possible_vars <- c(paste0(scale_name, "_Diagnosis"), "dsm1", "dsm2", "dsm4", "dsm5", "dsm6")
+    existing_special_vars <- possible_vars[possible_vars %in% names(result_data)]
+    if (length(existing_special_vars) > 0) {
+      new_variables <- c(new_variables, existing_special_vars)
+    }
   } else {
     # 其他方法或Total - 使用Total后缀
     total_score_name <- paste0(scale_name, "_Total")
     result_data[[total_score_name]] <- ifelse(valid_count >= min_valid_items,
                                              rowMeans(scale_data, na.rm = TRUE),
                                              NA)
+    new_variables <- c(new_variables, total_score_name)
   }
   
-  new_variables <- c(new_variables, total_score_name)
-  
-  # 计算子量表分数
-  subscales <- parse_subscales(subscales_definition, item_prefix)
-  
-  for (subscale_name in names(subscales)) {
-    subscale_items <- subscales[[subscale_name]]
-    existing_subscale_items <- intersect(subscale_items, existing_items)
+  # 计算子量表分数（特殊方法跳过常规子量表计算）
+  if (calculation_method != "special") {
+    subscales <- parse_subscales(subscales_definition, item_prefix)
     
-    if (length(existing_subscale_items) >= 2) {
-      subscale_data <- scale_data[, existing_subscale_items, drop = FALSE]
-      subscale_valid_count <- rowSums(!is.na(subscale_data))
-      min_subscale_items <- ceiling(length(existing_subscale_items) * 0.7)
+    for (subscale_name in names(subscales)) {
+      subscale_items <- subscales[[subscale_name]]
+      existing_subscale_items <- intersect(subscale_items, existing_items)
       
-      if (calculation_method == "sum") {
-        result_data[[subscale_name]] <- ifelse(subscale_valid_count >= min_subscale_items,
-                                              rowSums(subscale_data, na.rm = TRUE),
-                                              NA)
-      } else {
-        result_data[[subscale_name]] <- ifelse(subscale_valid_count >= min_subscale_items,
-                                              rowMeans(subscale_data, na.rm = TRUE),
-                                              NA)
+      if (length(existing_subscale_items) >= 2) {
+        subscale_data <- scale_data[, existing_subscale_items, drop = FALSE]
+        subscale_valid_count <- rowSums(!is.na(subscale_data))
+        min_subscale_items <- ceiling(length(existing_subscale_items) * 0.7)
+        
+        if (calculation_method == "sum") {
+          result_data[[subscale_name]] <- ifelse(subscale_valid_count >= min_subscale_items,
+                                                rowSums(subscale_data, na.rm = TRUE),
+                                                NA)
+        } else {
+          result_data[[subscale_name]] <- ifelse(subscale_valid_count >= min_subscale_items,
+                                                rowMeans(subscale_data, na.rm = TRUE),
+                                                NA)
+        }
+        
+        new_variables <- c(new_variables, subscale_name)
       }
-      
-      new_variables <- c(new_variables, subscale_name)
     }
   }
   
@@ -478,6 +503,177 @@ detect_underscore_patterns <- function(data) {
   patterns <- patterns[sapply(patterns, length) >= 3]
   
   return(patterns)
+}
+
+# 🔥 特殊逻辑处理函数（scale_calculator版本）
+apply_special_logic_calculator <- function(data, scale_name, item_prefix, item_numbers, special_logic) {
+  if (grepl("recode_1_5to1;dsm_binary_logic", special_logic)) {
+    # NSSI_DSM5特殊处理：先重编码1-5到0-1，然后应用DSM诊断逻辑
+    return(calculate_nssi_dsm5_logic_calculator(data, scale_name, item_prefix, item_numbers))
+  } else if (grepl("minus_1_first", special_logic)) {
+    # YFAS系列：先减1处理
+    return(apply_minus_1_first_calculator(data, scale_name, item_prefix, item_numbers, special_logic))
+  }
+  
+  return(data)
+}
+
+# NSSI DSM-5 特殊逻辑处理（按照用户实际处理方法）
+calculate_nssi_dsm5_logic_calculator <- function(data, scale_name, item_prefix, item_numbers) {
+  
+  cat("🔧 执行NSSI_DSM5特殊逻辑处理...\n")
+  
+  # 构建题目变量名
+  item_vars <- paste0(item_prefix, item_numbers)
+  existing_items <- item_vars[item_vars %in% names(data)]
+  
+  if(length(existing_items) == 0) {
+    cat("❌ 未找到NSSI_DSM5相关变量\n")
+    return(data)
+  }
+  
+  # 🧼 第一步：清理数据，去掉标签并转换为数值
+  cat("第1步：数据清理和转换为数值\n")
+  for(item in existing_items) {
+    # 处理带标签的数据（类似haven::zap_labels）
+    if(is.factor(data[[item]])) {
+      data[[item]] <- as.numeric(as.character(data[[item]]))
+    } else if(!is.numeric(data[[item]])) {
+      data[[item]] <- as.numeric(data[[item]])
+    }
+  }
+  
+  # 🔄 第二步：NSSI_DSM5_1的特殊重编码逻辑（只有1或5算满足）
+  cat("第2步：NSSI_DSM5_1特殊重编码（1或5→1，其他→0）\n")
+  if(paste0(item_prefix, "1") %in% names(data)) {
+    original_var <- paste0(item_prefix, "1")
+    original_values <- data[[original_var]]
+    # 只有回答1或5的算满足（1），其他都是0
+    data[[original_var]] <- ifelse(is.na(original_values), NA,
+                                 ifelse(original_values %in% c(1, 5), 1, 0))
+    cat("  - NSSI_DSM5_1重编码完成\n")
+  }
+  
+  # 🎯 第三步：创建六个DSM维度变量（dsm1到dsm6）
+  cat("第3步：创建DSM维度变量（dsm1-dsm6）\n")
+  
+  # dsm1 = NSSI_DSM5_1 (直接使用重编码后的值)
+  if(paste0(item_prefix, "1") %in% names(data)) {
+    data[["dsm1"]] <- data[[paste0(item_prefix, "1")]]
+    cat("  - dsm1创建完成（等于NSSI_DSM5_1）\n")
+  }
+  
+  # dsm2: 检查是否有多选题目（NSSI_DSM5_2_1_multi到NSSI_DSM5_2_5_multi）
+  dsm2_multi_items <- paste0(item_prefix, "2_", 1:5, "_multi")
+  dsm2_multi_existing <- dsm2_multi_items[dsm2_multi_items %in% names(data)]
+  
+  if(length(dsm2_multi_existing) > 0) {
+    # 多选题逻辑：任意一个子题满足就算1
+    data[["dsm2"]] <- as.numeric(rowSums(data[dsm2_multi_existing], na.rm = TRUE) > 0)
+    cat("  - dsm2创建完成（基于多选子题）\n")
+  } else if(paste0(item_prefix, "2") %in% names(data)) {
+    # 如果没有多选子题，使用主题目
+    data[["dsm2"]] <- ifelse(data[[paste0(item_prefix, "2")]] == 1, 1, 0)
+    cat("  - dsm2创建完成（基于主题目）\n")
+  }
+  
+  # dsm3: 检查是否有多选题目（NSSI_DSM5_3_1_multi到NSSI_DSM5_3_4_multi）
+  dsm3_multi_items <- paste0(item_prefix, "3_", 1:4, "_multi")
+  dsm3_multi_existing <- dsm3_multi_items[dsm3_multi_items %in% names(data)]
+  
+  if(length(dsm3_multi_existing) > 0) {
+    # 多选题逻辑：任意一个子题满足就算1
+    data[["dsm3"]] <- as.numeric(rowSums(data[dsm3_multi_existing], na.rm = TRUE) > 0)
+    cat("  - dsm3创建完成（基于多选子题）\n")
+  } else if(paste0(item_prefix, "3") %in% names(data)) {
+    # 如果没有多选子题，使用主题目
+    data[["dsm3"]] <- ifelse(data[[paste0(item_prefix, "3")]] == 1, 1, 0)
+    cat("  - dsm3创建完成（基于主题目）\n")
+  }
+  
+  # dsm4: NSSI_DSM5_4（是否满足）
+  if(paste0(item_prefix, "4") %in% names(data)) {
+    data[["dsm4"]] <- as.numeric(data[[paste0(item_prefix, "4")]] == 1)
+    cat("  - dsm4创建完成\n")
+  }
+  
+  # dsm5: NSSI_DSM5_5（是否满足）
+  if(paste0(item_prefix, "5") %in% names(data)) {
+    data[["dsm5"]] <- as.numeric(data[[paste0(item_prefix, "5")]] == 1)
+    cat("  - dsm5创建完成\n")
+  }
+  
+  # dsm6: NSSI_DSM5_6（是否满足）
+  if(paste0(item_prefix, "6") %in% names(data)) {
+    data[["dsm6"]] <- as.numeric(data[[paste0(item_prefix, "6")]] == 1)
+    cat("  - dsm6创建完成\n")
+  }
+  
+  # 🧮 第四步：计算NSSI总分（只加前五个维度：dsm1+dsm2+dsm3+dsm4+dsm5）
+  cat("第4步：计算NSSI总分（dsm1+dsm2+dsm3+dsm4+dsm5）\n")
+  dsm_components <- c("dsm1", "dsm2", "dsm3", "dsm4", "dsm5")
+  available_components <- dsm_components[dsm_components %in% names(data)]
+  
+  if(length(available_components) > 0) {
+    data[["NSSI"]] <- rowSums(data[available_components], na.rm = TRUE)
+    cat("  - NSSI总分计算完成，使用组件：", paste(available_components, collapse = ", "), "\n")
+  }
+  
+  # 🏷️ 第五步：重命名维度变量为最终格式
+  cat("第5步：重命名变量为最终格式\n")
+  rename_mapping <- list(
+    "dsm1" = paste0(scale_name, "_1"),
+    "dsm2" = paste0(scale_name, "_2"), 
+    "dsm3" = paste0(scale_name, "_3"),
+    "dsm4" = paste0(scale_name, "_4"),
+    "dsm5" = paste0(scale_name, "_5"),
+    "dsm6" = paste0(scale_name, "_6"),
+    "NSSI" = paste0(scale_name, "_Total")
+  )
+  
+  for(old_name in names(rename_mapping)) {
+    new_name <- rename_mapping[[old_name]]
+    if(old_name %in% names(data)) {
+      data[[new_name]] <- data[[old_name]]
+      # 保留原名，因为可能在其他地方使用
+      cat("  - ", old_name, " → ", new_name, "\n")
+    }
+  }
+  
+  cat("✅ NSSI_DSM5特殊逻辑处理完成！\n\n")
+  
+  # 📊 显示处理结果摘要
+  final_vars <- c(paste0(scale_name, "_", 1:6), paste0(scale_name, "_Total"))
+  existing_final_vars <- final_vars[final_vars %in% names(data)]
+  
+  if(length(existing_final_vars) > 0) {
+    cat("📋 最终生成变量：", paste(existing_final_vars, collapse = ", "), "\n")
+    
+    # 显示变量的取值分布
+    for(var in existing_final_vars) {
+      if(var %in% names(data) && !all(is.na(data[[var]]))) {
+        unique_vals <- sort(unique(data[[var]][!is.na(data[[var]])]))
+        cat("  - ", var, ": ", paste(unique_vals, collapse = ", "), "\n")
+      }
+    }
+  }
+  
+  return(data)
+}
+
+# YFAS系列特殊逻辑：minus_1_first（scale_calculator版本）
+apply_minus_1_first_calculator <- function(data, scale_name, item_prefix, item_numbers, special_logic) {
+  
+  # 构建题目变量名
+  item_vars <- paste0(item_prefix, item_numbers)
+  existing_items <- item_vars[item_vars %in% names(data)]
+  
+  # 对所有题目先减1
+  for(item in existing_items) {
+    data[[item]] <- data[[item]] - 1
+  }
+  
+  return(data)
 }
 
 # 空值合并运算符
