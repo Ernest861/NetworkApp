@@ -7402,7 +7402,7 @@ server <- function(input, output, session) {
           "library(Rgraphviz)  # 网络可视化",
           "",
           "# 数据离散化（如果需要）",
-          "# 贝叶斯网络通常需要离散数据",
+          "# 贝叶斯网络通常需要离散数据，(那是针对特定的情况，我们的问卷一般不需要离散处理)",
           "discrete_data <- apply(analysis_data, 2, function(x) {",
           "  cut(x, breaks = 3, labels = c('Low', 'Medium', 'High'))",
           "})",
