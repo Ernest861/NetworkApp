@@ -1490,7 +1490,7 @@ conduct_likert_bayesian_analysis <- function(data,
     
     # 交叉验证评估 - 使用适合连续数据的损失函数
     cat("进行交叉验证...\n")
-    cv_result <- bnlearn::bn.cv(numeric_data, learned_net, loss = "logl-g", k = 10, debug = FALSE)
+    cv_result <- bnlearn::bn.cv(numeric_data, learned_net, loss = "logl", k = 10, debug = FALSE)
     cv_loss <- sapply(cv_result, function(x) x$loss)
     mean_cv_loss <- mean(cv_loss)
     sd_cv_loss <- sd(cv_loss)
